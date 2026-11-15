@@ -2,7 +2,9 @@
 Description=fitdata: daily data three times a day
 
 [Timer]
-OnCalendar=*-*-* 07:30,13:30,22:30
+OnCalendar=*-*-* 07:30
+OnCalendar=*-*-* 13:30
+OnCalendar=*-*-* 22:30
 RandomizedDelaySec=300
 Persistent=true
 
