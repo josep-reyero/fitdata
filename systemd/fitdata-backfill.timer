@@ -1,0 +1,10 @@
+[Unit]
+Description=fitdata: backfill history nightly
+
+[Timer]
+OnCalendar=*-*-* 02:15
+RandomizedDelaySec=600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

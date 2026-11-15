@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+dist/
+build/
+*.egg-info/
+# Never commit an archive or credentials.
+*.sqlite
+*.fit
+.state/
+garmin-tokens.json
+config.toml

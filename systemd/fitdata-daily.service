@@ -1,0 +1,7 @@
+[Unit]
+Description=fitdata: refresh the last 3 days (health data, sleep, HRV, readiness, activities)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/fitdata --local sync --days 3

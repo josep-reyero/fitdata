@@ -1,0 +1,7 @@
+[Unit]
+Description=fitdata: check Garmin Connect for new activities
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/fitdata --local activities-sync --days 2
