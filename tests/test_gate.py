@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from fitdata import cli
+from fitdata_garmin import cli
 
 REPO = Path(__file__).resolve().parents[1]
 GATE = REPO / "scripts" / "fitdata-ssh-gate"
@@ -119,7 +119,7 @@ def test_the_gate_with_the_real_fitdata(tmp_path, archive):
     shutil.copy(GATE, folder / "fitdata-ssh-gate")
     (folder / "fitdata-ssh-gate").chmod(0o755)
     (folder / "fitdata").write_text(f'#!/bin/sh\nexec "{sys.executable}" -I -c '
-                                    '"import sys; from fitdata.cli import main; sys.exit(main(sys.argv[1:]))" "$@"\n')
+                                    '"import sys; from fitdata_garmin.cli import main; sys.exit(main(sys.argv[1:]))" "$@"\n')
     (folder / "fitdata").chmod(0o755)
     env = {"FITDATA_DATA_DIR": os.environ["FITDATA_DATA_DIR"], "FITDATA_CONFIG": os.environ["FITDATA_CONFIG"]}
 

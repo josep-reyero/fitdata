@@ -13,9 +13,9 @@ import pytest
 
 from conftest import TOKEN_TEXT, use
 from fakegarmin import FakeApi, FakeSession, activity
-from fitdata import config, index, paths, query, storage, sync
-from fitdata.errors import NotFound
-from fitdata.validate import BadInput
+from fitdata_garmin import config, index, paths, query, storage, sync
+from fitdata_garmin.errors import NotFound
+from fitdata_garmin.validate import BadInput
 
 TODAY = date.today().isoformat()
 AID = 424242
@@ -300,7 +300,7 @@ def test_set_storage_keeps_the_rest_of_the_file(tmp_path, monkeypatch, before, a
 
 
 def test_rate_limit_stops_the_run_and_keeps_the_day_incomplete(tmp_path, monkeypatch):
-    from fitdata.client import RateLimited
+    from fitdata_garmin.client import RateLimited
     use(tmp_path, monkeypatch)
 
     class Limited(FakeSession):

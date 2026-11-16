@@ -13,7 +13,7 @@ import pytest
 
 from conftest import DAY
 from fakegarmin import FakeSession
-from fitdata import cli, client, describe, paths
+from fitdata_garmin import cli, client, describe, paths
 
 COMMAND_KEYS = {"name", "kind", "help", "builtin", "args"}
 ARG_KEYS = {"name", "flag", "kind", "type", "required", "default", "many", "choices", "help"}
@@ -82,7 +82,7 @@ def test_describe_never_forwards(run, monkeypatch):
     calls = []
     monkeypatch.setattr(cli.subprocess, "call", lambda argv: calls.append(argv) or 0)
     monkeypatch.setenv("FITDATA_REMOTE", "my-server")
-    from fitdata import config
+    from fitdata_garmin import config
     config.load.cache_clear()
     assert run("--json", "describe")[0] == 0 and not calls
 
@@ -91,7 +91,7 @@ def test_describe_as_mes_runs_it(archive):
     """mes runs `<program> --json describe` as a separate process with MES_ALLOW=read."""
     import os
     env = {**os.environ, "MES_ALLOW": "read"}
-    res = subprocess.run([sys.executable, "-m", "fitdata.cli", "--json", "describe"], capture_output=True, env=env)
+    res = subprocess.run([sys.executable, "-m", "fitdata_garmin.cli", "--json", "describe"], capture_output=True, env=env)
     assert res.returncode == 0 and json.loads(res.stdout)["allowed"] == "read"
 
 
@@ -150,7 +150,7 @@ def test_level_checked_before_forwarding(run, monkeypatch):
     monkeypatch.setattr(cli.subprocess, "call", lambda argv: calls.append(argv) or 0)
     monkeypatch.setenv("FITDATA_REMOTE", "my-server")
     monkeypatch.setenv("MES_ALLOW", "read")
-    from fitdata import config
+    from fitdata_garmin import config
     config.load.cache_clear()
     assert run("sync")[0] == 4 and not calls
     assert run("summary")[0] == 0 and len(calls) == 1

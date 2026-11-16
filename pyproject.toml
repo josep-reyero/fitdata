@@ -24,8 +24,10 @@ dev = ["pytest>=8"]
 testpaths = ["tests"]
 
 [project.scripts]
-fitdata-garmin = "fitdata.cli:main"
-fitdata = "fitdata.cli:main"          # short name for the same command
+# The project command: hands each command to the project's apps (README, "Commands").
+fitdata = "fitdata_garmin.cli:main"
+# The project's one app so far: the Garmin archive.
+fitdata-garmin = "fitdata_garmin.cli:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -35,4 +37,4 @@ build-backend = "hatchling.build"
 allow-direct-references = true  # the bucket extra above
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/fitdata"]
+packages = ["src/fitdata", "apps/fitdata_garmin"]

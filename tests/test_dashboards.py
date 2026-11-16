@@ -58,7 +58,7 @@ def test_headline_keys_match_fitdata(tmp_path, monkeypatch):
     monkeypatch.setenv("FITDATA_CONFIG", str(tmp_path / "no-config.toml"))
     monkeypatch.setenv("FITDATA_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("FITDATA_REMOTE", "")
-    sync = pytest.importorskip("fitdata.sync")
+    sync = pytest.importorskip("fitdata_garmin.sync")
     mf = _make_fixture_module()
     assert tuple(sync._day_headline(tmp_path / "nothing")) == mf.DAY_HEADLINE_KEYS
     assert tuple(sync._activity_headline({})) == mf.ACTIVITY_HEADLINE_KEYS

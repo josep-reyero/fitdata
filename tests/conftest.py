@@ -40,10 +40,10 @@ def archive(tmp_path, monkeypatch):
     monkeypatch.delenv("FITDATA_STORAGE", raising=False)
     monkeypatch.delenv("MES_ALLOW", raising=False)
     monkeypatch.delenv("MES_VIA_GATE", raising=False)
-    from fitdata import config, paths
+    from fitdata_garmin import config, paths
     config.load.cache_clear()
     importlib.reload(paths)
-    from fitdata import index, storage
+    from fitdata_garmin import index, storage
     storage.close_all()
     index.rebuild()
     yield root
@@ -66,7 +66,7 @@ def use(tmp_path: Path, monkeypatch, storage_kind: str | None = None, config_tex
         monkeypatch.delenv("FITDATA_STORAGE", raising=False)
     monkeypatch.delenv("MES_ALLOW", raising=False)
     monkeypatch.delenv("MES_VIA_GATE", raising=False)
-    from fitdata import config, paths, storage
+    from fitdata_garmin import config, paths, storage
     storage.close_all()
     config.load.cache_clear()
     importlib.reload(paths)
@@ -80,7 +80,7 @@ def backend(request, tmp_path, monkeypatch):
         pytest.importorskip("mybucket", reason="my-bucket-storage is not installed (fitdata[bucket])")
     use(tmp_path, monkeypatch, request.param)
     yield request.param
-    from fitdata import config, storage
+    from fitdata_garmin import config, storage
     storage.close_all()
     config.load.cache_clear()
 
@@ -88,7 +88,7 @@ def backend(request, tmp_path, monkeypatch):
 @pytest.fixture
 def cli_run(capsys):
     """Run the CLI in-process without the `archive` fixture: returns (exit code, stdout, stderr)."""
-    from fitdata import cli
+    from fitdata_garmin import cli
 
     def _run(*argv: str):
         code = cli.main(list(argv))
@@ -100,7 +100,7 @@ def cli_run(capsys):
 @pytest.fixture
 def run(archive, capsys):
     """Run the CLI in-process: returns (exit code, stdout, stderr)."""
-    from fitdata import cli
+    from fitdata_garmin import cli
 
     def _run(*argv: str):
         code = cli.main(list(argv))
@@ -113,7 +113,7 @@ def run(archive, capsys):
 def _fresh_logger():
     """Each CLI run in a test adds log handlers; drop them so tests do not see each other's logs."""
     import logging
-    from fitdata import safefs
+    from fitdata_garmin import safefs
     safefs._reported.clear()  # each test sees its own warnings about skipped links
     yield
     log = logging.getLogger("fitdata")

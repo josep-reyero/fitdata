@@ -7,9 +7,9 @@ import os
 import pytest
 
 from conftest import ACTIVITY_ID, DAY, TOKEN_TEXT
-from fitdata import paths, query
-from fitdata.errors import NotFound
-from fitdata.validate import BadInput
+from fitdata_garmin import paths, query
+from fitdata_garmin.errors import NotFound
+from fitdata_garmin.validate import BadInput
 
 TOKEN_FROM_DAY = "../../../../../.state/garmin-tokens"
 TOKEN_FROM_ACTIVITY = "../../../../../../../.state/garmin-tokens"

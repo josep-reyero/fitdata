@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from fitdata import cli, describe
+from fitdata_garmin import cli, describe
 
 REPO = Path(__file__).resolve().parents[1]
 PROJECT = tomllib.loads((REPO / "project.toml").read_text())

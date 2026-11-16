@@ -18,8 +18,8 @@ import pytest
 
 from conftest import DAY, TOKEN_TEXT, use
 from fakegarmin import FakeApi, FakeSession, activity
-from fitdata import cli, client, config, index, paths, query, storage, sync
-from fitdata.errors import Refused, Temporary
+from fitdata_garmin import cli, client, config, index, paths, query, storage, sync
+from fitdata_garmin.errors import Refused, Temporary
 
 TODAY = date.today().isoformat()
 
@@ -86,7 +86,7 @@ def test_migrate_lists_at_most_twenty_problems(files_archive, cli_run):
 
 def test_migrate_gives_the_removal_hint_only_when_every_file_was_copied(files_archive, cli_run, monkeypatch):
     pytest.importorskip("mybucket")
-    from fitdata import migrate
+    from fitdata_garmin import migrate
     real = migrate._raw_files
     monkeypatch.setattr(migrate, "_raw_files", lambda: (real()[0] + 1, []))  # one file the copy missed
     code, out, err = cli_run("--json", "migrate-storage", "--to", "bucket")
@@ -427,7 +427,7 @@ def test_symlinked_sync_lock_is_not_truncated(tmp_path, monkeypatch, cli_run):
 
 
 def test_lock_helper_reports_busy_as_temporary(tmp_path):
-    from fitdata.safefs import hold_lock
+    from fitdata_garmin.safefs import hold_lock
     lock = tmp_path / ".state" / "x.lock"
     with hold_lock(lock):
         with pytest.raises(Temporary):

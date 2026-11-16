@@ -9,8 +9,8 @@ import subprocess
 
 import pytest
 
-from fitdata import cli
-from fitdata.validate import BadInput
+from fitdata_garmin import cli
+from fitdata_garmin.validate import BadInput
 
 NASTY = ["--json", "sql", "SELECT 'it''s' -- $(touch /tmp/pwned) `id` \\' ; rm -rf ~ \n \"x\" * ? !"]
 
@@ -20,7 +20,7 @@ def fake_ssh(monkeypatch, archive):
     calls = []
     monkeypatch.setattr(cli.subprocess, "call", lambda argv: calls.append(argv) or 0)
     monkeypatch.setenv("FITDATA_REMOTE", "my-server")
-    from fitdata import config
+    from fitdata_garmin import config
     config.load.cache_clear()
     return calls
 
@@ -43,7 +43,7 @@ def test_login_gets_a_terminal(fake_ssh, run):
 @pytest.mark.parametrize("host", ["-oProxyCommand=touch /tmp/pwned", "-p", "my server", "host;id", "$(id)", ""])
 def test_bad_host_refused(fake_ssh, run, monkeypatch, host):
     monkeypatch.setenv("FITDATA_REMOTE", host)
-    from fitdata import config
+    from fitdata_garmin import config
     config.load.cache_clear()
     code, _, err = run("summary")
     if host == "":

@@ -281,7 +281,7 @@ def main(argv: list[str] | None = None) -> int:
     os.environ.update(FITDATA_DATA_DIR=str(root), FITDATA_REMOTE="", FITDATA_CONFIG=str(work / "config.toml"))
     os.environ.pop("FITDATA_STORAGE", None)
     (work / "config.toml").write_text("")
-    from fitdata import fit, index, migrate, paths, query, storage
+    from fitdata_garmin import fit, index, migrate, paths, query, storage
 
     rng = random.Random(SEED)
     a = storage.archive(write=True)
@@ -325,7 +325,7 @@ def main(argv: list[str] | None = None) -> int:
     result = migrate.migrate("bucket", progress=False)
     migrate_s = time.monotonic() - t
     storage.close_all()
-    from fitdata import config
+    from fitdata_garmin import config
     config.load.cache_clear()
     bucket_disk, _, bucket_files = disk(config.load().store_dir)
 

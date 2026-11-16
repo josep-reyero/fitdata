@@ -7,8 +7,8 @@ import sqlite3
 import pytest
 
 from conftest import DAY
-from fitdata import paths, query
-from fitdata.validate import BadInput
+from fitdata_garmin import paths, query
+from fitdata_garmin.validate import BadInput
 
 
 def test_select_works(run):

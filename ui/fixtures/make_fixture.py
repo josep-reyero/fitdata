@@ -322,7 +322,7 @@ def _index(root: Path) -> None:
     (read once, at import) point only at the temporary folder."""
     env = {**os.environ, "FITDATA_DATA_DIR": str(root), "FITDATA_REMOTE": "",
            "FITDATA_CONFIG": str(root / "no-config.toml")}
-    subprocess.run([sys.executable, "-I", "-c", "from fitdata import index; index.rebuild()"], env=env, check=True)
+    subprocess.run([sys.executable, "-I", "-c", "from fitdata_garmin import index; index.rebuild()"], env=env, check=True)
 
 
 def build(out: Path) -> Path:

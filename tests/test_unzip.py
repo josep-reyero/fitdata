@@ -6,7 +6,7 @@ import zipfile
 
 import pytest
 
-from fitdata import sync
+from fitdata_garmin import sync
 
 
 def _zip(*entries: tuple[str, bytes]) -> bytes:

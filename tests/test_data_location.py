@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from conftest import use
-from fitdata import index, paths
+from fitdata_garmin import index, paths
 
 REPO = Path(__file__).resolve().parents[1]
 UI_DATA = tomllib.loads((REPO / "project.toml").read_text())["ui"]["data"]
@@ -26,7 +26,7 @@ def two_configs(tmp_path, monkeypatch):
     mes_config.write_text(f'[projects.fitdata]\ndata_dir = "{archive}"\n')
     monkeypatch.setenv("MES_CONFIG", str(mes_config))
     monkeypatch.setenv("MES_DATA_HOME", str(mes_home))
-    from fitdata import config
+    from fitdata_garmin import config
     import importlib
     config.load.cache_clear()
     importlib.reload(paths)

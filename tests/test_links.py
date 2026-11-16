@@ -14,8 +14,8 @@ import pytest
 
 from conftest import ACTIVITY_ID, DAY, TOKEN_TEXT
 from fakegarmin import FakeApi, FakeSession, activity
-from fitdata import index, paths, query, storage, sync
-from fitdata.errors import NotFound, Refused
+from fitdata_garmin import index, paths, query, storage, sync
+from fitdata_garmin.errors import NotFound, Refused
 
 SECRET = "OUTSIDE-SECRET-DO-NOT-LEAK"
 
@@ -115,7 +115,7 @@ def test_decode_refuses_folders_pipes_and_huge_files(run, archive, tmp_path, mon
     os.mkfifo(fifo)
     code, _, err = run("decode", str(fifo))
     assert code == 2 and "pipe" in err
-    from fitdata import fit
+    from fitdata_garmin import fit
     monkeypatch.setattr(fit, "MAX_FIT_BYTES", 10)
     big = tmp_path / "big.fit"
     big.write_bytes(b"0" * 100)
