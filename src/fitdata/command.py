@@ -55,7 +55,7 @@ CLI_OBJECT_RE = re.compile(r"^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)*:[A-Za-z_][A-
 NOT_APP_PROGRAMS = re.compile(
     r"^(?:python[0-9.]*|pythonw|pip[0-9.]*|uv|uvx|pydoc[0-9.]*|ipython[0-9]*|pytest|py\.test|activate.*|"
     r"sh|bash|zsh|fish|dash|env|deactivate|mes|easy-ui|mybucket)\Z", re.IGNORECASE)
-RESERVED_SHORT = ("describe", "guide", "apps", "help")
+RESERVED_SHORT = ("describe", "guide", "apps", "help", "sqlite", "mes")
 BUILTINS = ("describe", "guide", "apps")
 MAX_APPS = 16
 MAX_PROJECT_TOML = 256 * 1024
@@ -82,6 +82,7 @@ class Problem(Exception):
     def __init__(self, message: str, *, hint: str | None = None, kind: str = "error", code: int = 1) -> None:
         super().__init__(message)
         self.message, self.hint, self.kind, self.code = message, hint, kind, code
+        self.changed = False  # a lock that is out of date only because project.toml changed
 
 
 def _show(value: object) -> str:
@@ -269,8 +270,15 @@ def _short(name: str, project: str) -> str:
 
 def _from_lock(root: Path, project: str, digest: str, packages: list[str]) -> list[tuple]:
     """(package, folder, in_project, name, program) of each app, from a lock that passes every check."""
-    def stale(why: str) -> Problem:
-        return Problem(f"{STALE_LOCK} ({why})", hint=SYNC_HINT, kind="apps_lock_stale")
+    def stale(why: str, changed: bool = False) -> Problem:
+        if changed:
+            p = Problem("project.toml changed after the list of apps (apps.lock.json) was written, so fitdata will not "
+                        "guess which apps to run.", hint="Run: mes apps sync (it takes a second), then run this "
+                        "command again.", kind="apps_lock_stale")
+        else:
+            p = Problem(f"{STALE_LOCK} ({why})", hint=SYNC_HINT, kind="apps_lock_stale")
+        p.changed = changed
+        return p
     data = _read(root / LOCK_FILE, MAX_LOCK, "The list of installed apps")
     try:
         lock = json.loads(data.decode("utf-8"))
@@ -281,10 +289,10 @@ def _from_lock(root: Path, project: str, digest: str, packages: list[str]) -> li
     if lock.get("project") != project:
         raise stale("it is for another project")
     if lock.get("project_toml_sha256") != digest:
-        raise stale("project.toml changed after it was written")
+        raise stale("project.toml changed after it was written", changed=True)
     apps = lock.get("apps")
     if not isinstance(apps, list) or [a.get("package") if isinstance(a, dict) else None for a in apps] != packages:
-        raise stale("its apps are not the ones [project] apps lists")
+        raise stale("its apps are not the ones [project] apps lists", changed=True)
     out = []
     for a in apps:
         path, name, program, in_project = a.get("path"), a.get("name"), a.get("program"), a.get("in_project")
@@ -308,9 +316,18 @@ def load(root: Path | None = None) -> Project:
     raw = _read(path, MAX_PROJECT_TOML, "project.toml")
     name, title, version, packages = _project_table(_toml(raw, path, "project.toml"), path)
     digest = hashlib.sha256(raw).hexdigest()
+    located = None
     if os.path.lexists(root / LOCK_FILE):
-        located = _from_lock(root, name, digest, packages)
-    else:
+        try:
+            located = _from_lock(root, name, digest, packages)
+        except Problem as e:
+            # Out of date only because project.toml changed, and every app is in apps/: read the apps as
+            # without a lock (the same rule as mes). A damaged lock is still refused.
+            if e.kind != "apps_lock_stale" or not e.changed or not all(
+                    _is_real_dir(root / "apps" / p) and os.path.lexists(root / "apps" / p / "app.toml")
+                    for p in packages):
+                raise
+    if located is None:
         located = []
         for package in packages:
             folder = root / "apps" / package
@@ -320,6 +337,7 @@ def load(root: Path | None = None) -> Project:
             located.append((package, folder, True, None, None))
     apps: list[App] = []
     seen: dict[str, str] = {}
+    programs: dict[str, str] = {}
     for package, folder, in_project, lock_name, lock_program in located:
         app_name, app_title, program = _app_toml(folder, package, name)
         if lock_name is not None and (lock_name != app_name or lock_program != program):
@@ -334,6 +352,12 @@ def load(root: Path | None = None) -> Project:
                 raise Problem(f"The apps {seen[word]} and {app_name} would both be called {word!r} in fitdata "
                               "commands.", hint="Rename one of them.", kind="config_invalid")
             seen[word] = app_name
+        if program in programs:
+            raise Problem(f"The apps {programs[program]} and {app_name} both name the program {program!r}, so one "
+                          "app's commands would run the other's program.",
+                          hint="Give each app its own program ([app] cli or command in its app.toml).",
+                          kind="config_invalid")
+        programs[program] = app_name
         apps.append(App(package, app_name, short, app_title, program, folder, in_project))
     return Project(root, name, title, version, tuple(apps), Path(sys.executable).parent)
 

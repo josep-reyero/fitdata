@@ -271,8 +271,39 @@ GOOD = {"package": "fitdata_garmin", "name": "fitdata-garmin", "in_project": Tru
 
 
 @pytest.mark.parametrize("change", [
-    {"v": 2}, {"project": "other"}, {"project_toml_sha256": "0" * 64}, {"apps": []},
-    {"apps": [dict(GOOD, package="other_app")]},
+    {"project_toml_sha256": "0" * 64}, {"apps": []}, {"apps": [dict(GOOD, package="other_app")]},
+])
+def test_a_lock_out_of_date_only_because_project_toml_changed_is_ignored_with_every_app_in_apps(project, change):
+    """Every app is in apps/, so the project is read exactly as without a lock (the same rule as mes)."""
+    root, _ = project
+    apps = [dict(a, path=a.get("path", str(root / "apps" / "fitdata_garmin"))) for a in change.pop("apps", [GOOD])]
+    _lock(root, apps, **change)
+    assert [a.name for a in command.load().apps] == ["fitdata-garmin"]
+
+
+def test_a_changed_project_toml_with_an_installed_app_still_needs_mes_apps_sync(project, tmp_path, capsys):
+    root, _ = project
+    installed = _app(tmp_path / "site-packages", "fitdata_strava", "fitdata-strava", "Strava")
+    (root / "project.toml").write_text('[project]\nname = "fitdata"\napps = ["fitdata_garmin", "fitdata_strava"]\n')
+    _lock(root, [dict(GOOD, path=str(root / "apps" / "fitdata_garmin")),
+                 {"package": "fitdata_strava", "name": "fitdata-strava", "path": str(installed),
+                  "in_project": False, "program": "fitdata-strava"}], project_toml_sha256="0" * 64)
+    assert command.main(["--json", "status"]) == 1
+    err = json.loads(capsys.readouterr().err)
+    assert err["error"].startswith("project.toml changed after the list of apps")
+    assert err["hint"].startswith("Run: mes apps sync")
+
+
+def test_two_apps_may_not_name_the_same_program(project, capsys):
+    root, _ = project
+    _app(root, "fitdata_strava", "fitdata-strava", "Strava", command_line='command = "fitdata-garmin"\n')
+    (root / "project.toml").write_text('[project]\nname = "fitdata"\napps = ["fitdata_garmin", "fitdata_strava"]\n')
+    assert command.main(["--json", "apps"]) == 1
+    assert "both name the program" in json.loads(capsys.readouterr().err)["error"]
+
+
+@pytest.mark.parametrize("change", [
+    {"v": 2}, {"project": "other"},
     {"apps": [dict(GOOD, path="relative/apps/fitdata_garmin")]},
     {"apps": [dict(GOOD, path="/x/../apps/fitdata_garmin")]},
     {"apps": [dict(GOOD, path="/does/not/exist")]},
