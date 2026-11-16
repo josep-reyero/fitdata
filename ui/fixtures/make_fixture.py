@@ -4,9 +4,11 @@ Every number here is made up by a seeded random generator. Nothing comes from a 
 or a real account.
 
 The script writes a small fake archive (day.json and activity.json files, as `fitdata sync`
-would) into a temporary folder and runs fitdata's own indexer on it. So the sample has exactly
-the tables and columns a real `fitdata.sqlite` has (days, activities, files), with the same
-untyped columns and the same JSON text in columns such as training_status.
+would) into a temporary folder and runs fitdata-garmin's own indexer on it, which writes through
+apps/fitdata_garmin/schema.sql. So the sample has exactly what a real `fitdata.sqlite` has: the
+shared tables' rows (days__rows, activities__rows, all with source = 'fitdata-garmin'), their
+views (days, activities, which the dashboards read), fitdata-garmin's own garmin_files, and the
+same JSON text in columns such as training_status.
 
 It covers 120 days (2026-01-05 to 2026-05-04) and about 30 activities, with the gaps a real
 archive has: a few days without the watch, one day missing from the archive, nights without
@@ -345,7 +347,7 @@ def main(argv: list[str] | None = None) -> int:
         path = build(args.out)
     except (ImportError, subprocess.CalledProcessError) as e:
         print(f"Could not make the sample data, because fitdata's indexer did not run ({e}). "
-              "Run this from the fitdata-garmin folder with: uv run python ui/fixtures/make_fixture.py",
+              "Run this from the fitdata repository folder with: uv run python ui/fixtures/make_fixture.py",
               file=sys.stderr)
         return 1
     print(f"Wrote synthetic sample data ({DAYS} days from {START} to {END}, made-up numbers) to {path}.")
