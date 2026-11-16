@@ -24,7 +24,8 @@ dev = ["pytest>=8"]
 testpaths = ["tests"]
 
 [project.scripts]
-fitdata = "fitdata.cli:main"
+fitdata-garmin = "fitdata.cli:main"
+fitdata = "fitdata.cli:main"          # short name for the same command
 
 [build-system]
 requires = ["hatchling"]

@@ -7,28 +7,29 @@ name = "fitdata"
 title = "Fitness"
 version = "0.1.0"
 
-[apps.fitdata]
-cli = "fitdata"            # the console script; `fitdata --json describe` lists its commands and kinds
+# The project's first app: the Garmin archive. More apps (other data sources) can sit beside it.
+[apps.fitdata-garmin]
+cli = "fitdata-garmin"     # the console script (`fitdata` is a short name for it); `fitdata-garmin --json describe` lists its commands and kinds
 
 # The jobs match systemd/*.timer. "--local" keeps a job on this machine even if the config names a
 # remote. Every job only talks to Garmin Connect (sign-in refresh and data). `fitdata login`, which is
 # not a job (a person runs it), also reaches mobile.integration.garmin.com during the sign-in itself.
 [jobs.activities]
-run = "fitdata activities-sync --days 2 --local"
+run = "fitdata-garmin activities-sync --days 2 --local"
 schedule = "*:0/10"                      # every 10 minutes: new activities
 network = ["connectapi.garmin.com", "connect.garmin.com", "diauth.garmin.com", "sso.garmin.com"]
 memory = "512M"
 timeout = "20m"
 
 [jobs.daily]
-run = "fitdata sync --days 3 --local"
+run = "fitdata-garmin sync --days 3 --local"
 schedule = "*-*-* 07,13,22:30:00"        # 07:30, 13:30 and 22:30: the last 3 days' health data
 network = ["connectapi.garmin.com", "connect.garmin.com", "diauth.garmin.com", "sso.garmin.com"]
 memory = "512M"
 timeout = "30m"
 
 [jobs.backfill]
-run = "fitdata backfill --max-days 90 --local"
+run = "fitdata-garmin backfill --max-days 90 --local"
 schedule = "*-*-* 02:15:00"              # nightly: 90 more days of history until it is complete
 network = ["connectapi.garmin.com", "connect.garmin.com", "diauth.garmin.com", "sso.garmin.com"]
 memory = "512M"

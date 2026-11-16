@@ -12,4 +12,4 @@ MemoryMax=512M
 TimeoutStartSec=3h
 NoNewPrivileges=yes
 UMask=0077
-ExecStart=%h/.local/bin/fitdata --local backfill --max-days 90
+ExecStart=%h/.local/bin/fitdata-garmin --local backfill --max-days 90

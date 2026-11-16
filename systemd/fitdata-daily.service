@@ -12,4 +12,4 @@ MemoryMax=512M
 TimeoutStartSec=30m
 NoNewPrivileges=yes
 UMask=0077
-ExecStart=%h/.local/bin/fitdata --local sync --days 3
+ExecStart=%h/.local/bin/fitdata-garmin --local sync --days 3

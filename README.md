@@ -1,4 +1,4 @@
-# fitdata-garmin
+# fitdata
 
 Keep your own complete copy of your Garmin data, and use it any way you like:
 
@@ -27,6 +27,10 @@ It uses Garmin Connect's web endpoints through
 [python-garminconnect](https://github.com/cyberjunky/python-garminconnect). These are not an
 official API and can change. Fetching is throttled to be gentle.
 
+fitdata is the project; **fitdata-garmin** is its first app, the one that archives Garmin data (its
+command is `fitdata-garmin`, with `fitdata` as a short name for the same thing). Other data
+sources can be added later as more apps in the same project.
+
 fitdata is a [my-easy-software](https://github.com/josep-reyero/my-easy-software) (`mes`) **project** ([`project.toml`](project.toml)), and it also works on its own, without `mes`.
 
 ## Install
@@ -36,7 +40,7 @@ In a clone of this repository:
 ```sh
 uv sync --locked --no-dev                  # exactly the versions pinned in uv.lock, into .venv/
 uv sync --locked --no-dev --extra bucket   # the same, plus the optional bucket storage (see Storage)
-mkdir -p ~/.local/bin && ln -sf "$PWD/.venv/bin/fitdata" ~/.local/bin/fitdata
+mkdir -p ~/.local/bin && ln -sf "$PWD/.venv/bin/fitdata-garmin" "$PWD/.venv/bin/fitdata" ~/.local/bin/
 ```
 
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/). fitdata holds your Garmin login, so it

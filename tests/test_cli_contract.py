@@ -28,7 +28,7 @@ def _describe(run, *env_args):
 
 def test_describe_has_the_mes_shape(run):
     d = _describe(run)
-    assert TOP_KEYS <= set(d) and d["app"] == "fitdata" and d["allowed"] == "admin"
+    assert TOP_KEYS <= set(d) and d["app"] == "fitdata-garmin" and d["allowed"] == "admin"
     assert d["exit_codes"] == {"0": "ok", "1": "error", "2": "usage", "3": "not found", "4": "not allowed",
                                "5": "refused for safety", "6": "needs a person", "75": "temporary failure, retry"}
     for c in d["commands"]:
@@ -68,7 +68,7 @@ def test_describe_arguments(run):
 def test_describe_lists_the_jobs_of_project_toml(run):
     jobs = {j["name"]: j for j in _describe(run)["jobs"]}
     assert set(jobs) == {"activities", "daily", "backfill"}
-    assert jobs["backfill"]["run"] == "fitdata backfill --max-days 90 --local" and jobs["backfill"]["trigger"] == "schedule"
+    assert jobs["backfill"]["run"] == "fitdata-garmin backfill --max-days 90 --local" and jobs["backfill"]["trigger"] == "schedule"
 
 
 def test_describe_text_and_guide(run):

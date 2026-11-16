@@ -285,7 +285,7 @@ def _main(argv: list[str], forwarded: bool = False) -> int:
     if args.cmd == "guide":
         text = _guide()
         if args.json:
-            _print({"app": "fitdata", "source": "AGENTS.md", "guide": text}, True)
+            _print({"app": "fitdata-garmin", "source": "AGENTS.md", "guide": text}, True)
         else:
             print(text)
         return 0

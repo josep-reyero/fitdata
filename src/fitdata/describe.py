@@ -4,7 +4,7 @@ The JSON has the shape my-easy-software apps produce (`mes.App.describe()`), so 
 `mes gate` can ask fitdata which commands it has and what each may do, without fitdata depending
 on mes:
 
-    {"app": "fitdata", "title", "version", "mes_version": null, "allowed", "json", "exit_codes",
+    {"app": "fitdata-garmin", "title", "version", "mes_version": null, "allowed", "json", "exit_codes",
      "commands": [{"name", "kind", "help", "builtin", "args": [{"name", "flag", "kind", "type",
                    "required", "default", "many", "choices", "help"}]}],
      "jobs": [...from project.toml...]}
@@ -124,7 +124,7 @@ def jobs() -> list[dict[str, Any]]:
 
 def describe(parser: argparse.ArgumentParser) -> dict[str, Any]:
     return {
-        "app": "fitdata",
+        "app": "fitdata-garmin",
         "project": "fitdata",
         "title": "Fitness",
         "version": __version__,

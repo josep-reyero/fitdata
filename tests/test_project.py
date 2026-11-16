@@ -39,7 +39,7 @@ def test_project_table():
     assert p["name"] == "fitdata" and re.fullmatch(r"[a-z][a-z0-9-]{1,30}", p["name"])
     assert p["title"] == "Fitness" and p["version"]
     pyproject = tomllib.loads((REPO / "pyproject.toml").read_text())
-    assert PROJECT["apps"]["fitdata"]["cli"] in pyproject["project"]["scripts"]
+    assert PROJECT["apps"]["fitdata-garmin"]["cli"] in pyproject["project"]["scripts"]
     assert not (REPO / "app.toml").exists()  # replaced by project.toml
 
 
@@ -57,7 +57,7 @@ def test_jobs_match_the_systemd_units(job):
     # Same command and arguments ("--local" may sit before or after the command).
     exec_argv = shlex.split(service["Service"]["ExecStart"])[1:]
     run_argv = shlex.split(j["run"])
-    assert run_argv[0] == "fitdata"
+    assert run_argv[0] == "fitdata-garmin"
     assert sorted(run_argv[1:]) == sorted(exec_argv) and "--local" in run_argv
     assert service["Service"]["SuccessExitStatus"] == "75"
     # The same limits as the mes job, and the owner-only, no-new-privileges settings.
