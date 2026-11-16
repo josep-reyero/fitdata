@@ -1,8 +1,14 @@
-"""The fitness dashboards (ui/dashboards/*.yaml) and their synthetic sample data (ui/fixtures/).
+"""The fitness dashboards and their synthetic sample data (ui/fixtures/).
 
-The first tests need only fitdata: they check that the sample has exactly the columns the real
-index has. The rest need my-easy-ui (import package `easyui`) and are skipped when it is not
-installed. To run everything:
+The project's Today page is ui/dashboards/overview.yaml, with anchors where fitdata-garmin adds its
+sections (apps/fitdata_garmin/dashboards/overview-garmin.yaml); Sleep, Activities and Trends are
+fitdata-garmin's own dashboards (apps/fitdata_garmin/dashboards/). Every dashboard reads only the
+project's shared views, days and activities.
+
+Most tests need only fitdata: they compose the dashboards as the apps contract says
+(tests/compose_dashboards.py) and run every query on the sample with SQLite. The last ones need
+a my-easy-ui that composes dashboards (the apps rework) and are skipped otherwise. To run
+everything:
 
     uv run --with-editable <path to my-easy-ui> python -m pytest tests/test_dashboards.py
 
@@ -12,6 +18,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -21,12 +28,15 @@ from pathlib import Path
 
 import pytest
 
+from compose_dashboards import apps, compose, order, sources
+from conftest import easyui_for_project
+
 REPO = Path(__file__).resolve().parents[1]
 FIXTURE = REPO / "ui" / "fixtures" / "fitdata-sample.db"
 MAKE_FIXTURE = REPO / "ui" / "fixtures" / "make_fixture.py"
-DASHBOARDS = REPO / "ui" / "dashboards"
-SLUGS = ("activities", "overview", "sleep", "trends")
+SLUGS = ("overview", "sleep", "activities", "trends")
 DAY_CHOICES = (7, 30, 90, 365)
+SHARED = ("days", "activities")
 
 
 def _rows(db: Path, sql: str, *args) -> list[tuple]:
@@ -67,14 +77,17 @@ def test_headline_keys_match_fitdata(tmp_path, monkeypatch):
 def test_fixture_is_what_the_generator_and_the_real_indexer_make(tmp_path):
     out = tmp_path / "fresh.sqlite"
     subprocess.run([sys.executable, str(MAKE_FIXTURE), "--out", str(out)], check=True, capture_output=True)
-    tables = ("days", "activities", "files")
-    assert [r[0] for r in _rows(FIXTURE, "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")] == sorted(tables)
-    for t in tables:
+    objects = "SELECT type, name FROM sqlite_master WHERE type IN ('table', 'view') ORDER BY type, name"
+    assert _rows(FIXTURE, objects) == [("table", "activities__rows"), ("table", "days__rows"), ("table", "garmin_files"),
+                                       ("view", "activities"), ("view", "days")]
+    assert _rows(FIXTURE, objects) == _rows(out, objects)
+    for t, order_by in (("days__rows", "date"), ("activities__rows", "id"), ("garmin_files", "path"),
+                        ("days", "date"), ("activities", "id")):
         assert _columns(FIXTURE, t) == _columns(out, t), f"columns of {t} differ: run ui/fixtures/make_fixture.py"
-        order = "path" if t == "files" else ("date" if t == "days" else "id")
-        assert _rows(FIXTURE, f'SELECT * FROM "{t}" ORDER BY {order}') == _rows(out, f'SELECT * FROM "{t}" ORDER BY {order}'), (
+        assert _rows(FIXTURE, f'SELECT * FROM "{t}" ORDER BY {order_by}') == _rows(out, f'SELECT * FROM "{t}" ORDER BY {order_by}'), (
             f"ui/fixtures/fitdata-sample.db is out of date ({t}): run uv run python ui/fixtures/make_fixture.py"
         )
+    assert _rows(FIXTURE, "SELECT DISTINCT source FROM days__rows") == [("fitdata-garmin",)]
 
 
 def test_fixture_has_realistic_gaps():
@@ -91,87 +104,118 @@ def test_fixture_has_realistic_gaps():
     assert one("SELECT count(*) FROM days WHERE complete = 0") == 2  # the last two days still settle
 
 
-def test_project_toml_allows_only_days_and_activities():
+def test_the_dashboards_may_read_only_the_shared_views():
+    """The allowlist (contract 4.6): the shared views, then [views], then each app's [ui] tables."""
     project = tomllib.loads((REPO / "project.toml").read_text())
-    assert project["project"]["name"] == "fitdata" and project["project"]["title"] == "Fitness"
-    assert project["ui"]["data"] == "fitdata.sqlite"
-    assert project["ui"]["tables"] == ["days", "activities"]
+    allow = [*project["tables"], *project.get("views", {}), *[t for a in apps(REPO) for t in a["ui"].get("tables", [])]]
+    assert allow == list(SHARED) and "tables" not in project["ui"]
 
 
-# ------------------------------------------------------------------ dashboards (needs my-easy-ui)
+# ------------------------------------------------------------------ composition (fitdata only)
 
 
-@pytest.fixture
-def easyui(tmp_path, monkeypatch):
-    """my-easy-ui with the sample data built as the dashboard data, all in a temporary folder."""
-    pytest.importorskip("easyui", reason="my-easy-ui is not installed, so the dashboards were not checked. Run: uv run --with-editable <path to my-easy-ui> python -m pytest tests/test_dashboards.py")
-    from easyui import appconfig, bundle, cli, spec
-
-    monkeypatch.setenv("MES_DATA_HOME", str(tmp_path / "mes"))
-    monkeypatch.setenv("EASYUI_STATE_HOME", str(tmp_path / "state"))
-    return type("EasyUI", (), {"appconfig": appconfig, "bundle": bundle, "cli": cli, "spec": spec, "tmp": tmp_path})
+def test_where_each_dashboard_comes_from_and_the_menu():
+    found = sources(REPO)
+    assert {s: f for s, (f, _) in found.items()} == {
+        "sleep": "fitdata-garmin", "activities": "fitdata-garmin", "trends": "fitdata-garmin", "overview": "project"}
+    assert order(REPO) == list(SLUGS)
 
 
-def _build(eu, source: Path = FIXTURE):
-    data = eu.tmp / "mes" / "fitdata"
-    data.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(source, data / "fitdata.sqlite")
-    cfg = eu.appconfig.load(REPO)
-    eu.bundle.build(cfg)
-    return cfg, eu.bundle.require_current(cfg)
+def test_the_overview_is_todays_page_once_composed():
+    dash, placed, warnings = compose(REPO, "overview")
+    assert warnings == [] and placed == [
+        {"app": "fitdata-garmin", "id": "garmin-readings", "file": "apps/fitdata_garmin/dashboards/overview-garmin.yaml",
+         "placed": "after:readings"},
+        {"app": "fitdata-garmin", "id": "garmin-trends", "file": "apps/fitdata_garmin/dashboards/overview-garmin.yaml",
+         "placed": "after:trends"}]
+    assert list(dash["queries"]) == ["last_day", "garmin_latest", "garmin_daily"]
+    assert not any(isinstance(r, dict) for r in dash["layout"])  # the anchors are gone
+    shape = [[c["type"] + ":" + str(c.get("title")) for c in row] for row in dash["layout"]]
+    assert shape == [
+        ["controls:None", "stat:Data up to"],
+        ["stat:Steps", "stat:Resting heart rate", "stat:Sleep score", "stat:Overnight HRV"],
+        ["stat:Body Battery high", "stat:Training readiness"],
+        ["line:Sleep score", "line:Resting heart rate"],
+        ["line:Overnight HRV", "bar:Steps per day"],
+        ["text:None"]]
+    queries = {c.get("query") for row in dash["layout"] for c in row} - {None}
+    assert queries == set(dash["queries"])
 
 
-@pytest.fixture
-def built(easyui):
-    cfg, current = _build(easyui)
-    return easyui, cfg, current
+def test_the_project_overview_alone_shows_only_shared_data():
+    """Without the app's sections, the project's page still works: it reads only shared views."""
+    raw = compose_dashboards_raw("overview")
+    assert [r for r in raw["layout"] if isinstance(r, dict)] == [{"anchor": "readings"}, {"anchor": "trends"}]
+    assert list(raw["queries"]) == ["last_day"]
 
 
-def _run(eu, current: Path, slug: str, days: int) -> dict:
-    dash = eu.spec.load_file(DASHBOARDS / f"{slug}.yaml")
-    return eu.spec.run_queries(dash, list(dash.queries), {"days": days}, bundle_path=current)["results"]
+def compose_dashboards_raw(slug: str) -> dict:
+    import yaml
+    return yaml.safe_load(sources(REPO)[slug][1].read_text())
 
 
-def test_every_dashboard_is_valid_against_the_sample(built):
-    eu, cfg, _ = built
-    report = eu.spec.validate_app(cfg)
-    problems = [p for d in report["dashboards"] for p in d["errors"] + d["warnings"]]
-    assert problems == []
-    assert report["ok"] and report["data"]["checked"]
-    assert sorted(d["slug"] for d in report["dashboards"]) == list(SLUGS)
+def test_a_project_override_removes_or_replaces_the_apps_sections(tmp_path):
+    copy = tmp_path / "proj"
+    shutil.copytree(REPO, copy, ignore=shutil.ignore_patterns(".venv", ".git", "__pycache__", "*.db"))
+    (copy / "ui" / "sections").mkdir()
+    (copy / "ui" / "sections" / "fitdata-garmin.overview.yaml").write_text("spec: easy-ui/sections-v1\nsections: []\n")
+    dash, placed, _ = compose(copy, "overview")
+    assert placed == [] and list(dash["queries"]) == ["last_day"] and len(dash["layout"]) == 1
 
 
-def test_cli_validate(built, capsys):
-    eu, _, _ = built
-    code = eu.cli.run(["validate", "--json", "--app-dir", str(REPO)])
-    out = json.loads(capsys.readouterr().out)
-    assert code == 0 and out["ok"] and out["errors"] == 0 and out["warnings"] == 0
+def test_sections_follow_the_contract():
+    import yaml
+    (app,) = apps(REPO)
+    for slug, c in app["ui"]["contributes"].items():
+        assert slug in sources(REPO)
+        doc = yaml.safe_load((app["folder"] / c["sections"]).read_text())
+        assert set(doc) == {"spec", "sections"} and doc["spec"] == "easy-ui/sections-v1" and len(doc["sections"]) <= 10
+        for s in doc["sections"]:
+            assert set(s) <= {"id", "position", "queries", "layout"} and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,40}", s["id"])
+            assert all(q.startswith("garmin_") for q in s["queries"]) and 1 <= len(s["layout"]) <= 10
 
 
-def test_only_allowlisted_tables_reach_the_dashboards(built):
-    eu, _, current = built
-    assert {t["name"] for t in eu.bundle.describe_tables(current, samples=0)} == {"days", "activities"}
+# ------------------------------------------------------------------ every query on the sample (fitdata only)
 
 
-@pytest.mark.parametrize("slug", SLUGS)
-def test_compiled_dashboards_have_the_days_control_and_no_sql(built, slug):
-    eu, _, _ = built
-    compiled = eu.spec.compile_dashboard(eu.spec.load_file(DASHBOARDS / f"{slug}.yaml"))
-    text = json.dumps(compiled).lower()
-    assert "select " not in text and '"sql"' not in text
-    (days,) = compiled["params"]
-    assert days["name"] == "days" and days["label"] == "Days" and days["type"] == "choice"
-    assert [o["value"] for o in days["options"]] == list(DAY_CHOICES)
-    assert compiled["layout"][0][0] == {"id": "r0c0", "type": "controls", "title": None, "params": ["days"]}
+def _run(slug: str, days: int, db: Path = FIXTURE) -> dict:
+    dash, _, _ = compose(REPO, slug)
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        out = {}
+        for name, q in dash["queries"].items():
+            cur = con.execute(q["sql"], {"days": days} if ":days" in q["sql"] else {})
+            out[name] = {"columns": [d[0] for d in cur.description], "rows": cur.fetchall()}
+        return out
+    finally:
+        con.close()
+
+
+def test_every_dashboard_reads_only_the_shared_views():
+    stored = {n for (n,) in _rows(FIXTURE, "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")}
+    for slug in SLUGS:
+        dash, _, _ = compose(REPO, slug)
+        for name, q in dash["queries"].items():
+            words = set(re.findall(r"[a-z_]+", q["sql"].lower()))
+            assert words & stored <= set(SHARED), (slug, name)
 
 
 @pytest.mark.parametrize("days", DAY_CHOICES)
 @pytest.mark.parametrize("slug", SLUGS)
-def test_every_query_runs_for_every_period(built, slug, days):
-    eu, _, current = built
-    for name, r in _run(eu, current, slug, days).items():
-        assert not r["truncated"], name
+def test_every_query_runs_for_every_period(slug, days):
+    for name, r in _run(slug, days).items():
         assert r["rows"], f"{slug}.{name} returned no rows for {days} days"
+
+
+@pytest.mark.parametrize("slug", SLUGS)
+def test_every_dashboard_has_the_days_control(slug):
+    dash, _, _ = compose(REPO, slug)
+    assert list(dash["params"]) == ["days"]
+    days = dash["params"]["days"]
+    assert days["label"] == "Days" and days["type"] == "choice" and [o["value"] for o in days["options"]] == list(DAY_CHOICES)
+    assert dash["layout"][0][0] == {"type": "controls"}
+    used = {c.get("query") for row in dash["layout"] for c in row} - {None}
+    assert used == set(dash["queries"]), slug  # no query is left unused, none is missing
 
 
 def _window(days: int) -> tuple[str, str]:
@@ -180,11 +224,14 @@ def _window(days: int) -> tuple[str, str]:
     return start, end  # the period is start < date <= end
 
 
+def _one(r: dict) -> dict:
+    return dict(zip(r["columns"], r["rows"][0]))
+
+
 @pytest.mark.parametrize("days", DAY_CHOICES)
-def test_overview_latest_values(built, days):
-    eu, _, current = built
+def test_overview_latest_values(days):
     start, end = _window(days)
-    row = dict(zip(*(lambda r: (r["columns"], r["rows"][0]))(_run(eu, current, "overview", days)["latest"])))
+    row = _one(_run("overview", days)["garmin_latest"])
     # Steps come from the last full day, the other readings from the latest day that has one.
     steps_day, steps = _rows(FIXTURE, "SELECT date, steps FROM days WHERE has_data = 1 AND steps > 0 AND date < ? "
                                       "ORDER BY date DESC LIMIT 1", end)[0]
@@ -196,11 +243,11 @@ def test_overview_latest_values(built, days):
                               "AND date > ? AND date <= ? ORDER BY date DESC LIMIT 1", start, end)[0][0]
     assert row["hrv"] == last_hrv
     assert all(row[k] is not None for k in row)
+    assert _run("overview", days)["last_day"]["rows"] == [(end,)]
 
 
-def test_overview_daily_leaves_unrecorded_days_empty(built):
-    eu, _, current = built
-    r = _run(eu, current, "overview", 365)["daily"]
+def test_overview_daily_leaves_unrecorded_days_empty():
+    r = _run("overview", 365)["garmin_daily"]
     days = {row[0]: dict(zip(r["columns"], row)) for row in r["rows"]}
     no_watch = [d for (d,) in _rows(FIXTURE, "SELECT date FROM days WHERE has_data = 0")]
     for d in no_watch:
@@ -209,11 +256,10 @@ def test_overview_daily_leaves_unrecorded_days_empty(built):
 
 
 @pytest.mark.parametrize("days", DAY_CHOICES)
-def test_sleep_averages_skip_missing_nights(built, days):
-    eu, _, current = built
+def test_sleep_averages_skip_missing_nights(days):
     start, end = _window(days)
-    r = _run(eu, current, "sleep", days)
-    row = dict(zip(r["summary"]["columns"], r["summary"]["rows"][0]))
+    r = _run("sleep", days)
+    row = _one(r["summary"])
     scores = [s for (s,) in _rows(FIXTURE, "SELECT sleep_score FROM days WHERE has_data = 1 AND sleep_score IS NOT NULL "
                                            "AND date > ? AND date <= ?", start, end)]
     assert row["score"] == pytest.approx(sum(scores) / len(scores))
@@ -221,11 +267,10 @@ def test_sleep_averages_skip_missing_nights(built, days):
 
 
 @pytest.mark.parametrize("days", DAY_CHOICES)
-def test_activity_totals_and_weeks_add_up(built, days):
-    eu, _, current = built
+def test_activity_totals_and_weeks_add_up(days):
     start, end = _window(days)
-    r = _run(eu, current, "activities", days)
-    totals = dict(zip(r["totals"]["columns"], r["totals"]["rows"][0]))
+    r = _run("activities", days)
+    totals = _one(r["totals"])
     acts = _rows(FIXTURE, "SELECT type, coalesce(distance_m, 0), duration_s FROM activities WHERE date > ? AND date <= ?",
                  start, end)
     assert totals["count"] == len(acts) == len(r["recent"]["rows"])
@@ -242,9 +287,8 @@ def test_activity_totals_and_weeks_add_up(built, days):
         assert totals["count_change"] is None and totals["distance_change"] is None
 
 
-def test_recent_activities_show_missing_values_as_empty(built):
-    eu, _, current = built
-    r = _run(eu, current, "activities", 365)["recent"]
+def test_recent_activities_show_missing_values_as_empty():
+    r = _run("activities", 365)["recent"]
     rows = [dict(zip(r["columns"], row)) for row in r["rows"]]
     strength = [x for x in rows if x["kind"] == "Strength training"]
     assert strength and all(x["distance"] is None and x["pace"] is None for x in strength)
@@ -253,40 +297,118 @@ def test_recent_activities_show_missing_values_as_empty(built):
     assert runs and all(240 < x["pace"] < 480 for x in runs)  # seconds per km
 
 
-def test_trends_weeks_start_with_the_archive(built):
-    eu, _, current = built
-    r = _run(eu, current, "trends", 365)
+def test_trends_weeks_start_with_the_archive():
+    r = _run("trends", 365)
     for name in ("health", "training"):
         weeks = [row[0] for row in r[name]["rows"]]
         assert weeks[0] == "2026-01-05" and weeks[-1] == "2026-05-04"
         assert len(weeks) == len(set(weeks)) == 18
 
 
-def test_dashboards_cope_with_an_empty_archive(easyui, tmp_path):
+def test_dashboards_cope_with_an_empty_archive(tmp_path):
     """A fresh install: the index exists but has no rows yet. Nothing may fail."""
     empty = tmp_path / "empty.sqlite"
     shutil.copyfile(FIXTURE, empty)
     con = sqlite3.connect(empty)
-    con.executescript("DELETE FROM days; DELETE FROM activities; DELETE FROM files;")
+    con.executescript("DELETE FROM days__rows; DELETE FROM activities__rows; DELETE FROM garmin_files;")
     con.commit()
     con.close()
-    _, current = _build(easyui, empty)
     for slug in SLUGS:
         for days in DAY_CHOICES:
-            for name, r in _run(easyui, current, slug, days).items():
+            for name, r in _run(slug, days, empty).items():
                 assert all(v is None or v == 0 for row in r["rows"][:1] for v in row[1:]), (slug, name)
 
 
-def test_menu_order_names_every_dashboard_once():
+def test_dashboards_show_a_second_apps_days_and_activities(tmp_path):
+    """The shared views at work: another app's activity shows on the Activities page, and its
+    values fill a day where fitdata-garmin had none, without any change to the dashboards."""
+    from schema_script import schema_sql
+    two = tmp_path / "two.sqlite"
+    shutil.copyfile(FIXTURE, two)
     project = tomllib.loads((REPO / "project.toml").read_text())
-    order = project["ui"]["dashboards"]
-    files = sorted(p.stem for p in (REPO / "ui" / "dashboards").glob("*.yaml"))
-    assert order[0] == "overview" and sorted(order) == files
+    con = sqlite3.connect(two)
+    con.executescript(schema_sql(project, ["fitdata-garmin", "fitdata-strava"]))
+    end = con.execute("SELECT max(date) FROM days WHERE has_data = 1").fetchone()[0]
+    con.execute("INSERT INTO activities__rows (source, id, date, type, duration_s, distance_m, start_local) "
+                "VALUES ('fitdata-strava', 1, ?, 'road_biking', 3600, 30000, ? || ' 08:00:00')", (end, end))
+    con.commit()
+    con.close()
+    before = _one(_run("activities", 7)["totals"])
+    after = _one(_run("activities", 7, two)["totals"])
+    assert after["count"] == before["count"] + 1 and after["distance"] == pytest.approx(before["distance"] + 30000)
 
 
 def test_health_changes_say_which_way_is_good():
     """A higher resting heart rate must not look like good news: every health delta has better:."""
-    for name in ("overview", "sleep"):
-        text = (REPO / "ui" / "dashboards" / f"{name}.yaml").read_text()
-        assert text.count("      delta: ") == text.count("      better: "), name
-    assert "delta: resting_hr_change\n      better: lower" in (REPO / "ui" / "dashboards" / "overview.yaml").read_text()
+    for slug in ("overview", "sleep"):
+        dash, _, _ = compose(REPO, slug)
+        for row in dash["layout"]:
+            for c in row:
+                if "delta" in c:
+                    assert c.get("better") in ("higher", "lower"), (slug, c.get("title"))
+    (rhr,) = [c for row in compose(REPO, "overview")[0]["layout"] for c in row if c.get("delta") == "resting_hr_change"]
+    assert rhr["better"] == "lower"
+
+
+# ------------------------------------------------------------------ with my-easy-ui (the apps rework)
+
+
+@pytest.fixture
+def easyui(tmp_path, monkeypatch):
+    """my-easy-ui with the sample data as the project's database, all in temporary folders. Skipped
+    unless this my-easy-ui composes dashboards (`easy-ui compose`)."""
+    eu = easyui_for_project(REPO)
+    from easyui import cli
+    data = tmp_path / "mes" / "fitdata"
+    data.mkdir(parents=True)
+    shutil.copyfile(FIXTURE, data / "fitdata.sqlite")
+    for k, v in {"MES_DATA_HOME": tmp_path / "mes", "EASYUI_STATE_HOME": tmp_path / "state",
+                 "MES_CONFIG": tmp_path / "none.toml", "MES_STATE_HOME": tmp_path / "mes-state"}.items():
+        monkeypatch.setenv(k, str(v))
+    monkeypatch.delenv("MES_DATA_DIR", raising=False)
+
+    def run(*argv: str) -> tuple[int, str, str]:
+        import contextlib
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                code = cli.run([*argv, "--project-dir", str(REPO)])
+            except SystemExit as e:
+                code = e.code if isinstance(e.code, int) else 2
+        return code, out.getvalue(), err.getvalue()
+    code, out, err = run("compose", "--json")
+    if code != 0:
+        pytest.skip(f"this my-easy-ui does not compose dashboards yet: {(err or out).strip()[:200]}")
+    return type("EasyUI", (), {"run": staticmethod(run), "module": eu})
+
+
+def test_easy_ui_composes_as_the_tests_do(easyui):
+    code, out, _ = easyui.run("compose", "--json")
+    result = json.loads(out)
+    assert code == 0 and result["order"] == list(SLUGS) and result["warnings"] == []
+    by = {d["slug"]: d for d in result["dashboards"]}
+    assert {s: by[s]["from"] for s in SLUGS} == {"overview": "project", "sleep": "fitdata-garmin",
+                                                 "activities": "fitdata-garmin", "trends": "fitdata-garmin"}
+    assert [(s["id"], s["placed"]) for s in by["overview"]["sections"]] == [
+        ("garmin-readings", "after:readings"), ("garmin-trends", "after:trends")]
+
+
+def test_easy_ui_builds_and_validates_the_sample(easyui):
+    code, _, err = easyui.run("data", "build")
+    assert code == 0, err
+    code, out, err = easyui.run("validate", "--json")
+    report = json.loads(out)
+    assert code == 0 and report["ok"] and report["errors"] == 0 and report["warnings"] == 0, err
+
+
+def test_easy_ui_composes_into_files(easyui, tmp_path):
+    code, _, err = easyui.run("compose", "--out", str(tmp_path / "composed"))
+    assert code == 0, err
+    import yaml
+    files = sorted(p.stem for p in (tmp_path / "composed").glob("*.yaml"))
+    assert files == sorted(SLUGS)
+    composed = yaml.safe_load((tmp_path / "composed" / "overview.yaml").read_text())
+    assert list(composed["queries"]) == list(compose(REPO, "overview")[0]["queries"])
+    assert "anchor" not in json.dumps(composed["layout"])
+
