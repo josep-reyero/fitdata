@@ -427,3 +427,34 @@ def test_the_installed_fitdata_gives_the_same_answers_as_fitdata_garmin(archive)
     assert code == 2 and json.loads(err)["kind"] == "bad_input" and out == ""
     code, out, err = run("fitdata", "guide")
     assert code == 0 and out.startswith("# Fitness (fitdata)") and "## Garmin archive (fitdata garmin ...)" in out
+
+
+def test_remote_requests_go_through_both_project_commands(archive, tmp_path):
+    """A laptop's `fitdata days` reaches the archive machine's `~/.local/bin/fitdata` (the default
+    [remote] command), which is now the project command there: the answer is the archive's, and
+    the only note is the one the laptop prints for its own command line."""
+    _installed()
+    bin_ = tmp_path / "home" / ".local" / "bin"
+    bin_.mkdir(parents=True)
+    for n in ("fitdata", "fitdata-garmin"):
+        (bin_ / n).symlink_to(VENV_BIN / n)
+    fake_ssh = tmp_path / "ssh-bin" / "ssh"
+    fake_ssh.parent.mkdir()
+    # Like sshd: the last argument is one command line for the remote login shell. Locally the
+    # remote side is the same machine, with FITDATA_REMOTE unset so it reads its own archive.
+    calls = tmp_path / "ssh-calls.txt"
+    fake_ssh.write_text(f'#!/bin/sh\nfor last; do :; done\nprintf "%s\\n" "$last" >> "{calls}"\n'
+                        'unset FITDATA_REMOTE\nexec /bin/sh -c "$last"\n')
+    fake_ssh.chmod(0o755)
+    env = {k: v for k, v in os.environ.items() if k != "MES_PROJECT_DIR"}
+    env.update(HOME=str(tmp_path / "home"), PATH=f"{fake_ssh.parent}:/usr/bin:/bin", FITDATA_REMOTE="archive-host")
+
+    def run(*argv):
+        r = subprocess.run([str(VENV_BIN / "fitdata"), *argv], capture_output=True, text=True, env=env, timeout=60)
+        return r.returncode, r.stdout, r.stderr
+    code, out, err = run("--json", "sql", "SELECT count(*) AS n FROM days")
+    assert code == 0 and json.loads(out) == [{"n": 1}] and err == ""
+    code, out, err = run("days", "--from", "2026-11-14", "--to", "2026-11-14")
+    assert code == 0 and "2026-11-14" in out and err == NOTE.format(w="days")
+    sent = calls.read_text().splitlines()
+    assert len(sent) == 2 and all(s.startswith("~/.local/bin/fitdata --forwarded-argv ") for s in sent)
