@@ -11,6 +11,8 @@ from typing import Any
 
 from garmin_fit_sdk import Decoder, Stream
 
+from .validate import BadInput
+
 
 def decode(path: Path) -> dict[str, list[dict[str, Any]]]:
     return _decode(Stream.from_file(str(path)), path.name)
@@ -56,10 +58,9 @@ def csv_text(rows: list[dict[str, Any]]) -> str:
 def write_csv(rows: list[dict[str, Any]], out: Path) -> int:
     if not rows:
         return 0
+    from .safefs import write_new
     out.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out.with_suffix(out.suffix + ".tmp")
-    tmp.write_text(csv_text(rows), newline="")
-    tmp.replace(out)
+    write_new(out, csv_text(rows).encode())
     return len(rows)
 
 
@@ -78,18 +79,66 @@ def derive_activity(fit_data: bytes, archive, derived_key: str, name: str = "FIT
     return {"records": len(records), "laps": len(m.get("lap_mesgs", [])), "message_types": sorted(m)}
 
 
-def decode_cli(file: str, as_csv: bool) -> int:
-    from . import paths
-    from .errors import Refused
+# The largest FIT file fitdata decodes: the same cap as for one file unpacked from a Garmin
+# download. Real activity files are a few MB; decoding needs many times the file's size in memory.
+MAX_FIT_BYTES = 64 * 1024 * 1024
+
+
+def read_fit_file(file: str) -> tuple[bytes, str]:
+    """The bytes of a FIT file given on the command line, refusing the saved login (by what the
+    file is, not by its name), anything that is not a regular file, and very large files."""
+    import os
+    import stat
+
+    from .errors import NotFound, Refused
     path = Path(file)
-    if paths.is_secret(path):
-        raise Refused("That file is in the folder that holds the saved Garmin login, so fitdata will not "
-                      "decode it. Give it a FIT file from the archive or from the watch.")
-    m = decode(path)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0))
+    except (FileNotFoundError, NotADirectoryError):
+        raise NotFound("There is no file at the path given to decode, so nothing was decoded.",
+                       hint="Check the path of the FIT file and try again.") from None
+    except IsADirectoryError:
+        raise BadInput("decode needs a FIT file, but the path given is a folder.") from None
+    except PermissionError:
+        raise BadInput("fitdata may not read the file given to decode (permission denied).") from None
+    try:
+        st = os.fstat(fd)
+        if _is_state_file(st, path):
+            raise Refused("That file is in the folder that holds the saved Garmin login, so fitdata will not "
+                          "decode it. Give it a FIT file from the archive or from the watch.")
+        if stat.S_ISDIR(st.st_mode):
+            raise BadInput("decode needs a FIT file, but the path given is a folder.")
+        if not stat.S_ISREG(st.st_mode):
+            raise BadInput("decode needs an ordinary FIT file, but the path given is a pipe, socket or device.")
+        if st.st_size > MAX_FIT_BYTES:
+            raise BadInput(f"That file is larger than {MAX_FIT_BYTES // 2**20} MB, far larger than any real FIT "
+                           "file, so fitdata did not decode it.")
+        with os.fdopen(os.dup(fd), "rb") as fh:
+            data = fh.read(MAX_FIT_BYTES + 1)
+    finally:
+        os.close(fd)
+    if len(data) > MAX_FIT_BYTES:
+        raise BadInput(f"That file is larger than {MAX_FIT_BYTES // 2**20} MB, so fitdata did not decode it.")
+    return data, path.name
+
+
+def _is_state_file(st, path: Path) -> bool:
+    from . import paths
+    from .safefs import inside_state
+    return inside_state(path, paths.STATE, st)
+
+
+def decode_cli(file: str, as_csv: bool) -> int:
+    from .storage import write_new
+    data, name = read_fit_file(file)
+    m = decode_bytes(data, name)
     if as_csv:
+        stem = Path(name).stem
         for kind, rows in m.items():
-            out = Path.cwd() / f"{path.stem}.{kind.removesuffix('_mesgs')}.csv"
-            print(out, write_csv(rows, out))
+            out = Path.cwd() / f"{stem}.{kind.removesuffix('_mesgs')}.csv"
+            if rows:
+                write_new(out, csv_text(rows).encode())
+            print(out, len(rows))
     else:
         json.dump(m, sys.stdout, indent=1, default=str)
         print()

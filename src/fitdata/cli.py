@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-import fcntl
 import json
 import logging
 import os
@@ -44,7 +43,7 @@ from typing import Any
 
 from . import describe as desc
 from .config import load
-from .errors import FitdataError, NeedsHuman, Refused, Temporary
+from .errors import FitdataError, NeedsHuman, Refused
 from .validate import BadInput, check_date, check_remote_command, check_remote_host
 
 COLLECT = {"login", "sync", "activities-sync", "backfill", "account", "index", "migrate-storage"}
@@ -197,14 +196,11 @@ def _setup_logging(verbose: bool) -> None:
 @contextmanager
 def _lock():
     from . import paths
-    paths.STATE.mkdir(mode=0o700, parents=True, exist_ok=True)  # holds the login token: owner-only
-    with open(paths.LOCK, "w") as fh:
-        try:
-            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise Temporary("Another fitdata sync is running on this archive, so this one did not start.",
-                            hint="Nothing to do: the next run picks up where that one ends.") from None
+    from .safefs import hold_lock
+    with hold_lock(paths.LOCK):
         yield
+
+
 
 
 def _report(message: str, argv: list[str], kind: str, exit_code: int = 2, hint: str | None = None) -> None:
@@ -228,6 +224,8 @@ def _log_to_file(message: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Everything fitdata creates (archive files, index, logs, state) is for its owner only.
+    os.umask(0o077)
     argv = sys.argv[1:] if argv is None else argv
     forwarded = False
     try:

@@ -14,6 +14,7 @@ from typing import Any
 
 from . import endpoints, paths, storage
 from .errors import NotFound
+from .safefs import hold_lock
 from .validate import BadInput, check_activity_id, check_date, check_source
 
 # `fitdata sql`: rows returned unless --limit says otherwise, and how long one query may run.
@@ -36,7 +37,7 @@ ACTIVITY_EXTRA_SOURCES = ("list_entry",)
 
 def _db() -> sqlite3.Connection:
     if not paths.DB.exists():
-        raise NotFound(f"There is no index at {paths.DB} yet, so there is nothing to query.",
+        raise NotFound("There is no index in the data folder yet, so there is nothing to query.",
                        hint="Run: fitdata index (or fitdata sync)")
     # as_uri() escapes characters such as "?" or "#" in the folder name, so they can't add URI options.
     db = sqlite3.connect(f"{paths.DB.resolve().as_uri()}?mode=ro", uri=True)
@@ -187,41 +188,55 @@ def sql(query: str, limit: int | None = SQL_DEFAULT_LIMIT, timeout_s: float = SQ
         raise BadInput("--limit must be 1 or more: it is the largest number of rows to show.")
     db = _db()
     try:
-        db.execute("PRAGMA query_only = ON")
-        # Caps the memory SQLite may use for this query (this CLI runs one query per process).
-        db.execute(f"PRAGMA hard_heap_limit = {int(SQL_MAX_HEAP_BYTES)}")
-        db.setlimit(sqlite3.SQLITE_LIMIT_ATTACHED, 0)
-        db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, SQL_MAX_VALUE_BYTES)
-        db.set_authorizer(_sql_authorizer)
-        deadline = time.monotonic() + timeout_s
-        db.set_progress_handler(lambda: int(time.monotonic() > deadline), SQL_PROGRESS_STEPS)
-        try:
-            cur = db.execute(query)
-            rows = _fetch(cur, limit)
-        except sqlite3.ProgrammingError as e:
-            if "one statement" in str(e):
-                raise BadInput("fitdata sql runs one statement at a time. Remove the extra ';' "
-                               "statements and run each SELECT on its own.") from None
-            raise BadInput(f"SQLite could not run that query ({e}). Check it and try again.") from None
-        except sqlite3.DatabaseError as e:
-            msg = str(e)
-            if "not authorized" in msg or "authorization denied" in msg or "readonly" in msg or "read-only" in msg:
-                raise BadInput("fitdata sql can only read the index tables (days, activities, files). "
-                               "That query tries to change something, attach another file, change a "
-                               "setting (PRAGMA) or load code, so it was refused. Use a single SELECT; "
-                               "`fitdata schema` lists the tables and columns.") from None
-            if "interrupted" in msg:
-                raise BadInput(f"That query was still running after {timeout_s:g} seconds, so fitdata "
-                               "stopped it. Narrow it down, for example with a WHERE on date.") from None
-            if "too big" in msg or "out of memory" in msg or "no memory" in msg:
-                raise BadInput("That query builds a value or a result far larger than anything in the "
-                               f"index (one value may be at most {SQL_MAX_VALUE_BYTES // 1000} KB), so "
-                               "fitdata stopped it to protect this computer's memory. Ask for fewer or "
-                               "smaller values.") from None
-            raise BadInput(f"SQLite could not run that query: {msg}. Check the table and column names "
-                           "with `fitdata schema` and try again.") from None
+        with hold_lock(paths.STATE / "sql.lock", busy=SQL_BUSY, hint=SQL_BUSY_HINT):
+            return _sql(db, query, limit, timeout_s)
     finally:
         db.close()
+
+
+# One `fitdata sql` at a time per archive: each may use up to SQL_MAX_HEAP_BYTES of memory, so
+# many at once could still exhaust the machine. The lock lives in .state/, which no read command
+# can otherwise write.
+SQL_BUSY = "Another fitdata sql query is running on this archive, so this one did not start."
+SQL_BUSY_HINT = f"Try again in a moment: a query runs for {SQL_TIMEOUT_S} seconds at most."
+
+
+def _sql(db: sqlite3.Connection, query: str, limit: int | None, timeout_s: float) -> list[dict[str, Any]]:
+    db.execute("PRAGMA query_only = ON")
+    # Caps the memory SQLite may use for this query (this CLI runs one query per process).
+    db.execute(f"PRAGMA hard_heap_limit = {int(SQL_MAX_HEAP_BYTES)}")
+    # Sorting and grouping stay in that capped memory instead of spilling to temporary files.
+    db.execute("PRAGMA temp_store = MEMORY")
+    db.setlimit(sqlite3.SQLITE_LIMIT_ATTACHED, 0)
+    db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, SQL_MAX_VALUE_BYTES)
+    db.set_authorizer(_sql_authorizer)
+    deadline = time.monotonic() + timeout_s
+    db.set_progress_handler(lambda: int(time.monotonic() > deadline), SQL_PROGRESS_STEPS)
+    try:
+        cur = db.execute(query)
+        rows = _fetch(cur, limit)
+    except sqlite3.ProgrammingError as e:
+        if "one statement" in str(e):
+            raise BadInput("fitdata sql runs one statement at a time. Remove the extra ';' "
+                           "statements and run each SELECT on its own.") from None
+        raise BadInput(f"SQLite could not run that query ({e}). Check it and try again.") from None
+    except sqlite3.DatabaseError as e:
+        msg = str(e)
+        if "not authorized" in msg or "authorization denied" in msg or "readonly" in msg or "read-only" in msg:
+            raise BadInput("fitdata sql can only read the index tables (days, activities, files). "
+                           "That query tries to change something, attach another file, change a "
+                           "setting (PRAGMA) or load code, so it was refused. Use a single SELECT; "
+                           "`fitdata schema` lists the tables and columns.") from None
+        if "interrupted" in msg:
+            raise BadInput(f"That query was still running after {timeout_s:g} seconds, so fitdata "
+                           "stopped it. Narrow it down, for example with a WHERE on date.") from None
+        if "too big" in msg or "out of memory" in msg or "no memory" in msg:
+            raise BadInput("That query builds a value or a result far larger than anything in the "
+                           f"index (one value may be at most {SQL_MAX_VALUE_BYTES // 1000} KB), so "
+                           "fitdata stopped it to protect this computer's memory. Ask for fewer or "
+                           "smaller values.") from None
+        raise BadInput(f"SQLite could not run that query: {msg}. Check the table and column names "
+                       "with `fitdata schema` and try again.") from None
     if limit is not None and len(rows) > limit:
         rows = rows[:limit]
         print(f"Showing the first {limit} rows; there are more. Add --limit N to see more, "

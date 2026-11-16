@@ -158,6 +158,11 @@ def test_symlink_into_state_is_never_listed_or_copied(tmp_path, monkeypatch, cli
     proc = paths.day_dir(TODAY) / "processed"
     os.symlink(paths.TOKENS, proc / "leak.json")
     assert all(not e.key.endswith("leak.json") for e in storage.archive().walk("garmin"))
+    # The copy would not match what is on disk, so migrate-storage refuses and names the link.
+    code, _, err = cli_run("--json", "migrate-storage", "--to", "bucket")
+    assert code == 5 and "processed/leak.json" in json.loads(err)["error"] and TOKEN_TEXT not in err
+    assert config.load().storage == "files"
+    (proc / "leak.json").unlink()
     assert cli_run("--json", "migrate-storage", "--to", "bucket")[0] == 0
     a = storage.archive()
     assert a.kind == "bucket" and not a.exists(f"{paths.day_key(TODAY)}/processed/leak.json")
@@ -246,7 +251,7 @@ def test_without_mybucket_bucket_mode_says_how_to_install(tmp_path, monkeypatch,
     _sync()
     monkeypatch.setitem(sys.modules, "mybucket", None)  # as if it were not installed
     code, _, err = cli_run("migrate-storage", "--to", "bucket")
-    assert code == 1 and "fitdata[bucket]" not in err and ".[bucket]" in err
+    assert code == 1 and "fitdata[bucket]" not in err and "--extra bucket" in err
     assert config.load().storage == "files"
     monkeypatch.setenv("FITDATA_STORAGE", "bucket")
     config.load.cache_clear()

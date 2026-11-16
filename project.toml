@@ -11,13 +11,14 @@ version = "0.1.0"
 cli = "fitdata"            # the console script; `fitdata --json describe` lists its commands and kinds
 
 # The jobs match systemd/*.timer. "--local" keeps a job on this machine even if the config names a
-# remote. Every job only talks to Garmin Connect (sign-in refresh and data).
+# remote. Every job only talks to Garmin Connect (sign-in refresh and data). `fitdata login`, which is
+# not a job (a person runs it), also reaches mobile.integration.garmin.com during the sign-in itself.
 [jobs.activities]
 run = "fitdata activities-sync --days 2 --local"
 schedule = "*:0/10"                      # every 10 minutes: new activities
 network = ["connectapi.garmin.com", "connect.garmin.com", "diauth.garmin.com", "sso.garmin.com"]
 memory = "512M"
-timeout = "10m"
+timeout = "20m"
 
 [jobs.daily]
 run = "fitdata sync --days 3 --local"

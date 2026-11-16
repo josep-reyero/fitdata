@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
+
 from . import paths, storage
 
 log = logging.getLogger("fitdata")
@@ -37,12 +39,29 @@ def _manifests(a: storage.Archive, entries: list[storage.Entry]) -> tuple[list, 
     return days, acts
 
 
+# Column names come from the manifests' keys, which hold data from Garmin: only plain names
+# become columns, so nothing in a key can change the SQL that builds the table.
+COLUMN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+
+
 def _table(db: sqlite3.Connection, name: str, rows: list[dict], pk: str, base: tuple[str, ...] = ()) -> None:
     cols: list[str] = [pk, *base]
+    seen = {c.lower() for c in cols}  # SQLite column names ignore case
+    skipped: set[str] = set()
     for r in rows:
         for k in r:
-            if k not in cols:
-                cols.append(k)
+            if k in cols or k in skipped:
+                continue
+            if not (isinstance(k, str) and COLUMN_RE.fullmatch(k)) or k.lower() in seen:
+                skipped.add(k)
+                continue
+            cols.append(k)
+            seen.add(k.lower())
+    if skipped:
+        shown = ", ".join(repr(str(k))[:40] for k in sorted(skipped, key=str)[:5])
+        log.warning("index: left %d field name(s) out of the %s table because they are not plain column "
+                    "names (letters, digits and _, at most 64, not repeating another column): %s",
+                    len(skipped), name, shown)
     defs = ", ".join(f'"{c}"' + (" PRIMARY KEY" if c == pk else "") for c in cols)
     db.execute(f'DROP TABLE IF EXISTS "{name}"')
     db.execute(f'CREATE TABLE "{name}" ({defs})')

@@ -15,7 +15,9 @@ garmin/days/2026/2026-11-14/processed/sleep.json, so both backends hold the same
 index is the same for both. Keys are checked in one place (check_key): they must start with
 garmin/, and no part may start with "." or be "..". So no key can name anything in .state/ (the
 saved Garmin login), which stays a plain file and never goes into a bucket. The files backend
-also refuses any path that resolves into .state/ through a symbolic link.
+reaches every file name by name from the opened garmin/ folder and never follows a link
+(safefs.py), so a link in the archive leads nowhere, and it hands out only regular files with a
+single name that are not the saved login.
 
 The bucket backend needs the optional `mybucket` package (`fitdata[bucket]`); without it,
 storage = "files" works as before and storage = "bucket" says how to install it.
@@ -25,16 +27,15 @@ from __future__ import annotations
 import atexit
 import contextlib
 import json
-import os
 import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
-from . import paths
+from . import paths, safefs
 from .config import load
-from .errors import ConfigProblem, FitdataError, NotFound, Temporary
+from .errors import ConfigProblem, FitdataError, NotFound, Refused, Temporary
 from .validate import BadInput, check_activity_id
 
 SEGMENT_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,200}$")
@@ -102,101 +103,88 @@ class Archive:
             raise FitdataError("fitdata opened the archive read-only for this command, so nothing was written.")
 
 
+def _indexed_activity(a: Archive, activity_id: str) -> str | None:
+    """Where the index says the activity is, if that answer is a real activity folder in the
+    archive (checked; the index is only a hint)."""
+    if not paths.DB.exists():
+        return None
+    try:
+        db = sqlite3.connect(f"{paths.DB.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            row = db.execute("SELECT dir FROM activities WHERE CAST(id AS TEXT) = ?", (activity_id,)).fetchone()
+        finally:
+            db.close()
+    except sqlite3.Error:
+        return None
+    m = paths.ACTIVITY_KEY_RE.fullmatch(str(row[0])) if row and row[0] else None
+    if m and m.group(1) == activity_id and a.exists(f"{row[0]}/activity.json"):
+        return row[0]
+    return None
+
+
 # ------------------------------------------------------------------ plain files
 
 def write_new(path: Path, chunks: bytes | Iterable[bytes]) -> int:
     """Write to path.tmp (never following a symlink there), then move it into place."""
-    if isinstance(chunks, (bytes, bytearray)):
-        chunks = [bytes(chunks)]
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.unlink(missing_ok=True)
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
-    size = 0
-    try:
-        with os.fdopen(fd, "wb") as out:
-            for chunk in chunks:
-                out.write(chunk)
-                size += len(chunk)
-        tmp.replace(path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
-    return size
+    return safefs.write_new(path, chunks)
 
 
 class FilesArchive(Archive):
+    """Plain files under <root>/garmin. Every access goes name by name from the opened garmin
+    folder and never follows a link (safefs.Tree), so no read or write can leave it, and only
+    regular files with one name that are not the saved login are ever handed out."""
+
     kind = "files"
 
     def __init__(self, root: Path, readonly: bool = True) -> None:
         self.root = root
         self.readonly = readonly
+        self.tree = safefs.Tree(root, TOP, root / ".state")
 
     def _path(self, key: str) -> Path:
         return self.root / check_key(key)
 
     def read(self, key: str) -> bytes | None:
-        path = self._path(key)
-        if paths.is_secret(path):  # never hand out the saved login, even through a symlink
-            return None
-        try:
-            return path.read_bytes()
-        except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
-            return None
+        return self.tree.read(check_key(key))
 
     def write(self, key: str, data: bytes | Iterable[bytes]) -> int:
         self._require_writable()
-        path = self._path(key)
-        if paths.is_secret(path):
-            raise BadInput(f"{key} leads into the folder that holds the saved Garmin login, so fitdata "
-                           "did not write it. Remove the symbolic link that points there.")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        return write_new(path, data)
+        key = check_key(key)
+        try:
+            return self.tree.write(key, data)
+        except safefs.LinkInArchive as e:
+            raise Refused(f"fitdata did not write {key}: on the way there, {e.key} {e.why.removeprefix('it ')}, "
+                          "and fitdata never writes through links or into anything but its own folders "
+                          "inside the archive.",
+                          hint=f"Replace {e.key} with an ordinary folder (or remove it), then run the same "
+                          "command again.") from None
 
     def exists(self, key: str) -> bool:
-        path = self._path(key)
-        return path.is_file() and not paths.is_secret(path)
+        return self.tree.exists(check_key(key))
 
     def walk(self, prefix: str) -> list[Entry]:
-        base = self._path(prefix)
-        if paths.is_secret(base):
-            return []
-        out = []
-        # os.walk does not follow symlinked folders, so only a file that is itself a link can
-        # lead somewhere else; those are resolved and dropped when they point into .state/.
-        for folder, dirs, files in os.walk(base):
-            dirs[:] = [d for d in dirs if _valid_segment(d)]
-            for name in files:
-                f = Path(folder) / name
-                if not _valid_segment(name) or (f.is_symlink() and paths.is_secret(f)):
-                    continue
-                try:
-                    size = f.stat().st_size
-                except OSError:
-                    continue
-                out.append(Entry(f.relative_to(self.root).as_posix(), size))
-        return _sort(out)
+        return _sort(Entry(k, size) for k, size in self.tree.walk(check_key(prefix), _valid_segment))
 
     def children(self, prefix: str) -> tuple[list[str], list[str]]:
-        dirs, files = [], []
-        try:
-            entries = list(os.scandir(self._path(prefix)))
-        except (FileNotFoundError, NotADirectoryError):
-            return [], []
-        for e in entries:
-            if not _valid_segment(e.name):
-                continue
-            if e.is_dir():
-                dirs.append(e.name)
-            elif e.is_file() and not (e.is_symlink() and paths.is_secret(Path(e.path))):
-                files.append(e.name)
+        dirs, files = self.tree.children(check_key(prefix), _valid_segment)
         return sorted(dirs), sorted(files)
 
     def location(self, key: str) -> str:
         return str(self._path(key))
 
     def find_activity(self, activity_id: str) -> str | None:
-        p = paths.find_activity_dir(activity_id)
-        return p.relative_to(paths.ROOT).as_posix() if p else None
+        activity_id = check_activity_id(activity_id)
+        known = _indexed_activity(self, activity_id)
+        if known:
+            return known
+        suffix = f"-{activity_id}"
+        for year in self.children(paths.DAYS_KEY)[0]:
+            for day in self.children(f"{paths.DAYS_KEY}/{year}")[0]:
+                folder = f"{paths.DAYS_KEY}/{year}/{day}/activities"
+                for name in self.children(folder)[0]:
+                    if name.endswith(suffix):
+                        return f"{folder}/{name}"
+        return None
 
     def close(self) -> None:
         pass
@@ -211,8 +199,8 @@ def _mybucket():
         raise ConfigProblem(
             'storage is set to "bucket", but the my-bucket-storage package (mybucket) is not installed '
             "for fitdata, so the archive cannot be opened.",
-            hint="Install fitdata with the bucket extra: uv tool install --editable '.[bucket]' (from the "
-            'fitdata folder), or set storage = "files".') from None
+            hint="Install fitdata with the bucket extra: uv sync --locked --no-dev --extra bucket (in the "
+            'fitdata folder, see the README), or set storage = "files".') from None
     return mybucket
 
 
@@ -242,8 +230,8 @@ class BucketArchive(Archive):
         self.name = name
         self.readonly = readonly
         if readonly and not (store_dir / "buckets" / name).is_dir():
-            raise NotFound(f'The archive is set to live in the bucket "{name}" of {store_dir}, but that bucket '
-                           "does not exist yet, so there is nothing to read.",
+            raise NotFound(f'The archive is set to live in the bucket "{name}", but that bucket does not '
+                           "exist yet, so there is nothing to read.",
                            hint="Run fitdata sync to start it, or fitdata migrate-storage --to bucket to move "
                            "an existing archive of plain files into it.")
         with _bucket_errors("be opened"):
@@ -297,19 +285,9 @@ class BucketArchive(Archive):
 
     def find_activity(self, activity_id: str) -> str | None:
         activity_id = check_activity_id(activity_id)
-        # The index knows where each activity is; check that answer, then fall back to a listing.
-        if paths.DB.exists():
-            try:
-                db = sqlite3.connect(f"{paths.DB.resolve().as_uri()}?mode=ro", uri=True)
-                try:
-                    row = db.execute("SELECT dir FROM activities WHERE CAST(id AS TEXT) = ?", (activity_id,)).fetchone()
-                finally:
-                    db.close()
-            except sqlite3.Error:
-                row = None
-            m = paths.ACTIVITY_KEY_RE.fullmatch(str(row[0])) if row and row[0] else None
-            if m and m.group(1) == activity_id and self.exists(f"{row[0]}/activity.json"):
-                return row[0]
+        known = _indexed_activity(self, activity_id)
+        if known:
+            return known
         want = re.compile(rf"^(garmin/days/\d{{4}}/\d{{4}}-\d{{2}}-\d{{2}}/activities/[^/]+-{activity_id})/")
         for e in self.walk(paths.DAYS_KEY):
             m = want.match(e.key)

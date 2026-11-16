@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import getpass
 import logging
+import os
 import time
 from typing import Any, Callable
 
@@ -42,6 +43,91 @@ def _unreachable(e: Exception) -> Temporary:
                      "next run carries on where this one stopped.", hint="Check the network and try again later.")
 
 
+# The most bytes one answer from Garmin may hold (after decompression). Real answers are a few MB
+# (an activity's details, a zip of FIT files); this keeps a broken or hostile answer from filling
+# the memory before it is even looked at.
+MAX_RESPONSE_BYTES = 64 * 1024 * 1024
+# The saved login is a small JSON file; anything far larger is not one.
+MAX_TOKEN_BYTES = 1024 * 1024
+
+
+class ResponseTooLarge(Exception):
+    """An answer from Garmin was larger than MAX_RESPONSE_BYTES; it was dropped unread."""
+
+
+def _limit_response(resp, *args: Any, **kwargs: Any):
+    """A requests response hook: reads the body in pieces and stops past MAX_RESPONSE_BYTES.
+    Hooks run before requests reads the body, so a huge answer is never held in memory."""
+    limit = MAX_RESPONSE_BYTES
+    too_big = ResponseTooLarge(f"Garmin sent an answer larger than {limit // 2**20} MB, far larger than any "
+                               "real one, so fitdata dropped it without reading it all.")
+    length = resp.headers.get("Content-Length", "")
+    if length.isdigit() and int(length) > limit:
+        resp.close()
+        raise too_big
+    if getattr(resp, "_content", False) is not False:  # already read
+        if len(resp._content or b"") > limit:
+            raise too_big
+        return resp
+    chunks, total = [], 0
+    for chunk in resp.iter_content(1024 * 1024):
+        total += len(chunk)
+        if total > limit:
+            resp.close()
+            raise too_big
+        chunks.append(chunk)
+    resp._content = b"".join(chunks)
+    resp._content_consumed = True
+    return resp
+
+
+def _cap_responses(api: Any) -> None:
+    """Install _limit_response on the session garminconnect uses for its data calls."""
+    sess = getattr(getattr(api, "client", None), "_api_session", None)
+    hooks = getattr(sess, "hooks", None)
+    if isinstance(hooks, dict):
+        hooks.setdefault("response", [])
+        if _limit_response not in hooks["response"]:
+            hooks["response"].append(_limit_response)
+    else:
+        log.warning("fitdata could not cap the size of Garmin's answers with this version of "
+                    "garminconnect; it carries on without the cap.")
+
+
+def _damaged_login(why: str) -> "NotLoggedIn":
+    return NotLoggedIn(f"The saved Garmin login is damaged ({why}), so fitdata cannot use it. "
+                       "Run: fitdata login")
+
+
+def check_token_file() -> None:
+    """The saved login must be a small, ordinary JSON file holding the fields garminconnect reads.
+    Anything else needs a new login (exit 6), not a retry (exit 75)."""
+    import json
+    import stat
+    try:
+        fd = os.open(paths.TOKENS, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0))
+    except FileNotFoundError:
+        raise NotLoggedIn("No saved Garmin login. Run: fitdata login") from None
+    except OSError as e:
+        raise _damaged_login(f"it cannot be opened: {e.strerror}") from None
+    with os.fdopen(fd, "rb") as fh:
+        st = os.fstat(fh.fileno())
+        if not stat.S_ISREG(st.st_mode):
+            raise _damaged_login("it is not an ordinary file")
+        data = fh.read(MAX_TOKEN_BYTES + 1)
+    if len(data) > MAX_TOKEN_BYTES:
+        raise _damaged_login("it is far larger than a login")
+    try:
+        token = json.loads(data)
+    except (UnicodeDecodeError, ValueError):
+        raise _damaged_login("it is not valid JSON") from None
+    if not isinstance(token, dict) or not isinstance(token.get("di_token"), str) or not token["di_token"]:
+        raise _damaged_login("it does not hold a Garmin token")
+    for key in ("di_refresh_token", "di_client_id"):
+        if token.get(key) is not None and not isinstance(token[key], str):
+            raise _damaged_login(f"its {key} is not text")
+
+
 class Session:
     def __init__(self) -> None:
         self.api: Garmin | None = None
@@ -49,9 +135,9 @@ class Session:
         self.calls = 0
 
     def connect(self) -> "Session":
-        if not paths.TOKENS.exists():
-            raise NotLoggedIn("No saved Garmin login. Run: fitdata login")
+        check_token_file()
         api = Garmin()
+        _cap_responses(api)
         try:
             api.login(tokenstore=str(paths.TOKENS))
         except GarminConnectAuthenticationError as e:
@@ -60,7 +146,12 @@ class Session:
             raise RateLimited("Garmin Connect is limiting requests right now, so fitdata stopped before "
                               "fetching anything.", hint="Try again later; the timers do this by themselves.") from e
         except GarminConnectConnectionError as e:
+            if "Token path not loading cleanly" in str(e) or "Token extraction" in str(e):
+                raise _damaged_login("garminconnect could not read it") from e
             raise _unreachable(e) from e
+        except (ValueError, TypeError, KeyError, AttributeError) as e:
+            # garminconnect choked on the content of the saved login itself.
+            raise _damaged_login(f"{type(e).__name__}") from e
         self.api = api
         return self
 

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import os
 import re
+import secrets
 import tomllib
 from dataclasses import dataclass
 from functools import lru_cache
@@ -117,10 +118,11 @@ def _inside(path: Path, folder: Path) -> bool:
 
 def _check_store_location(cfg: Config) -> None:
     """The bucket store may not sit inside .state/ (the saved login) or inside the files tree."""
-    for folder, why in ((cfg.data_dir / ".state", "the folder that holds the saved Garmin login"),
-                        (cfg.data_dir / "garmin", "the folder of the archive's plain files")):
-        if _inside(cfg.store_dir, folder):
-            raise ConfigProblem(f"[bucket] store points inside {folder}, {why}, so fitdata will not use it.",
+    for name, why in ((".state", "the folder that holds the saved Garmin login"),
+                      ("garmin", "the folder of the archive's plain files")):
+        if _inside(cfg.store_dir, cfg.data_dir / name):
+            raise ConfigProblem(f"[bucket] store points inside {name}/ in the data folder, {why}, so fitdata "
+                                "will not use it.",
                                 hint="Leave [bucket] store out (it defaults to <data_dir>/store) or point it "
                                 "at a folder of its own.")
 
@@ -135,12 +137,20 @@ def set_storage(value: str) -> Path:
     """Write `storage = "<value>"` into the config file, keeping every other line as it is.
 
     Only a top-level `storage = ...` line (before the first [table]) is replaced; if there is
-    none, one is added before the first table. The file is replaced atomically and keeps its
-    permissions. Returns the path written."""
+    none, one is added before the first table. Before anything is written, the new text is read
+    back as TOML: it must say storage = "<value>" and everything else exactly as before (a
+    `storage =` line inside a multi-line string, for example, would not), or nothing is written.
+    A config file that is a symbolic link is written where the link points, so the link stays.
+    The new text goes to a new temporary file (random name, never through a link), keeps the
+    file's permissions, and replaces the file in one step; then the file is read again to make
+    sure. Returns the path written."""
+    from .errors import Refused
     if value not in STORAGE_KINDS:
         raise ValueError(value)
     path = config_path()
-    lines = path.read_text().splitlines(keepends=True) if path.exists() else []
+    target = Path(os.path.realpath(path))
+    old_text = target.read_text() if target.exists() else ""
+    lines = old_text.splitlines(keepends=True)
     new = f'storage = "{value}"\n'
     first_table = next((i for i, line in enumerate(lines) if _TABLE_LINE.match(line)), len(lines))
     for i in range(first_table):
@@ -151,11 +161,41 @@ def set_storage(value: str) -> Path:
         if first_table and not lines[first_table - 1].endswith("\n"):
             lines[first_table - 1] += "\n"
         lines.insert(first_table, new)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text("".join(lines))
-    if path.exists():
-        os.chmod(tmp, path.stat().st_mode & 0o7777)
-    tmp.replace(path)
+    text = "".join(lines)
+
+    def refuse() -> Refused:
+        return Refused(f'fitdata could not set storage = "{value}" in its config file {path} by itself: '
+                       "the file is laid out in a way it cannot safely change line by line (for example, a "
+                       "storage line inside a multi-line text value), so it left the file as it was.",
+                       hint=f'Open the file and set storage = "{value}" near the top, before any [table] line.')
+
+    try:
+        before, after = tomllib.loads(old_text), tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        raise refuse() from None
+    before["storage"] = value
+    if after != before:
+        raise refuse()
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    mode = target.stat().st_mode & 0o7777 if target.exists() else 0o600
+    tmp = target.with_name(f".{target.name}.{secrets.token_hex(8)}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0), 0o600)
+    try:
+        with os.fdopen(fd, "w") as out:
+            out.write(text)
+            os.fchmod(out.fileno(), mode)
+        os.replace(tmp, target)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     load.cache_clear()
+    try:
+        written = tomllib.loads(target.read_text())
+    except (OSError, tomllib.TOMLDecodeError):
+        written = {}
+    if written.get("storage") != value:
+        raise Refused(f'fitdata wrote storage = "{value}" into its config file {path}, but reading the file '
+                      "back does not give that value, so the switch did not take effect.",
+                      hint=f'Open the file and check that it says storage = "{value}" near the top.')
     return path

@@ -60,6 +60,11 @@ def test_jobs_match_the_systemd_units(job):
     assert run_argv[0] == "fitdata"
     assert sorted(run_argv[1:]) == sorted(exec_argv) and "--local" in run_argv
     assert service["Service"]["SuccessExitStatus"] == "75"
+    # The same limits as the mes job, and the owner-only, no-new-privileges settings.
+    assert service["Service"]["MemoryMax"] == j["memory"]
+    assert service["Service"]["TimeoutStartSec"] == j["timeout"]
+    assert service["Service"]["NoNewPrivileges"] == "yes"
+    assert service["Service"]["UMask"] == "0077"
 
 
 @pytest.mark.parametrize("job", sorted(UNITS))

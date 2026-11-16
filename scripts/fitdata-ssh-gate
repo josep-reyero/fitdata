@@ -1,0 +1,65 @@
+#!/bin/sh
+# fitdata-ssh-gate: the only thing an SSH key for fitdata may run (an SSH "forced command").
+#
+# In ~/.ssh/authorized_keys on the machine that keeps the archive, one line per key:
+#
+#   restrict,command="/home/you/.local/bin/fitdata-ssh-gate read" ssh-ed25519 AAAA... agent-laptop
+#
+# "read" lets that key run read commands only (write: also sync, index...; admin is never given
+# over a key: `fitdata login` needs the person at a terminal, through a key without this gate).
+#
+# What the other machine's fitdata sends is always one line: `<its fitdata command>
+# --forwarded-argv <base64url>`. This gate accepts exactly that shape and nothing else, ignores the
+# first word (it never runs what the caller names), and starts the fitdata next to this script
+# with MES_ALLOW set to the level above and MES_VIA_GATE=1, in a clean environment.
+# Anything else (a shell, scp, another command, extra words, odd characters) is refused (exit 4).
+
+LC_ALL=C
+export LC_ALL
+
+refuse() {
+    printf 'fitdata-ssh-gate: %s\n' "$1" >&2
+    exit "${2:-4}"
+}
+
+[ "$#" -eq 1 ] || refuse "set up with the wrong arguments: give exactly one level, read or write, for example command=\"$0 read\"." 1
+case $1 in
+    read | write) level=$1 ;;
+    *) refuse "set up with level '$1', which it does not know: use read or write." 1 ;;
+esac
+
+cmd=${SSH_ORIGINAL_COMMAND-}
+[ -n "$cmd" ] || refuse "this SSH key may only run fitdata requests, not a shell."
+
+# Printable ASCII only: no newlines, tabs or other control characters, nothing outside ASCII.
+case $cmd in
+    *[!\ -~]*) refuse "this SSH key may only run fitdata requests; that one has characters fitdata never sends." ;;
+esac
+
+# Exactly three words with one space between them: <command> --forwarded-argv <token>.
+first=${cmd%% *}
+rest=${cmd#* }
+[ -n "$first" ] && [ "$rest" != "$cmd" ] || refuse "this SSH key may only run fitdata requests."
+flag=${rest%% *}
+token=${rest#* }
+[ "$flag" = "--forwarded-argv" ] && [ "$token" != "$rest" ] || refuse "this SSH key may only run fitdata requests."
+case $token in
+    '' | *[!A-Za-z0-9_-]*) refuse "this SSH key may only run fitdata requests; that one is not in fitdata's format." ;;
+esac
+[ "${#token}" -le 65536 ] || refuse "that fitdata request is far too long."
+
+case $0 in
+    */*) here=${0%/*} ;;
+    *) refuse "set it up with its full path in authorized_keys, for example command=\"/home/you/.local/bin/fitdata-ssh-gate read\"." 1 ;;
+esac
+[ -x "$here/fitdata" ] || refuse "there is no fitdata next to this gate ($here/fitdata), so nothing was run." 1
+
+# A clean environment: nothing the SSH client sends (LC_*, LANG...) or the login brings along
+# reaches fitdata, except where fitdata's own settings are.
+set -- HOME="${HOME-}" PATH=/usr/local/bin:/usr/bin:/bin PYTHONUTF8=1 MES_ALLOW="$level" MES_VIA_GATE=1
+for name in USER LOGNAME FITDATA_CONFIG FITDATA_DATA_DIR FITDATA_STORAGE; do
+    eval "value=\${$name-}"
+    eval "isset=\${$name+x}"
+    [ -n "$isset" ] && set -- "$@" "$name=$value"
+done
+exec /usr/bin/env -i "$@" "$here/fitdata" --forwarded-argv "$token"

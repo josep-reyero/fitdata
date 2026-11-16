@@ -60,6 +60,8 @@ Guidelines:
   - `config.py`: the per-machine TOML config (`data_dir`, `storage`, `[bucket]`, `[remote]`).
   - `paths.py`: archive layout, as Paths and as storage keys.
   - `storage.py`: the one interface to the archive files (plain files or a bucket); key checks.
+  - `safefs.py`: how the files backend reaches files: name by name from the opened `garmin/`
+    folder, never following a link; only regular, single-named files that are not the login.
   - `migrate.py`: `migrate-storage` (copy, verify by SHA-256, switch, never delete).
   - `endpoints.py`: every Garmin source fetched, with descriptions.
   - `sync.py`: downloading and manifests.
@@ -69,6 +71,11 @@ Guidelines:
 - **Archive access goes through `storage.archive()`** (read-only) or `storage.archive(write=True)`,
   by key (`garmin/days/...`), never by building a path under data_dir. Keys are checked in
   `storage.check_key`; nothing can name `.state/`, and the saved login never enters a bucket.
+  Never open archive files with `open()`, `Path.read_*`, `glob` or `os.walk`: they follow links.
+- **Data from Garmin is untrusted:** check its shape before using it (see `sync._check_item`), and
+  skip and log one bad item rather than stopping the run.
+- `scripts/fitdata-ssh-gate` is the SSH forced command that sets `MES_ALLOW` for a key
+  (README, "Limiting what an SSH key may do"); `tests/test_gate.py` drives it with hostile input.
 - **No personal data in the repo:** no names, emails, hostnames, paths of a real machine,
   tokens or sample data from a real account. Machine specifics belong in
   `~/.config/fitdata/config.toml`.

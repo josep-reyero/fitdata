@@ -75,17 +75,20 @@ ACTIVITY_KEY_RE = re.compile(r"^garmin/days/\d{4}/\d{4}-\d{2}-\d{2}/activities/[
 
 
 def find_activity_dir(activity_id: int | str) -> Path | None:
-    # Digits only: a "*" or "../" in the id would otherwise widen the search or leave the archive.
-    for p in DAYS.glob(f"*/*/activities/*-{check_activity_id(activity_id)}"):
-        return p
-    return None
+    """The folder of a stored activity (plain files), found without following any link. Digits
+    only: a "*" or "../" in the id would otherwise widen the search or leave the archive."""
+    from .storage import FilesArchive
+    key = FilesArchive(ROOT).find_activity(check_activity_id(activity_id))
+    return ROOT / key if key else None
 
 
 def is_secret(path: Path) -> bool:
-    """True for anything inside .state/ (the saved Garmin login), even when reached through a
-    symlink. Read commands refuse such paths."""
+    """True for the saved Garmin login and anything else inside .state/, however the path names
+    it: through a symbolic link, a hard link, or in other letter case (compared by device and
+    inode, not by name). A path that cannot be opened is not secret (there is nothing to read)."""
+    from .safefs import inside_state
     try:
-        path.resolve().relative_to(STATE.resolve())
-        return True
-    except ValueError:
+        st = path.stat()
+    except OSError:
         return False
+    return inside_state(path, STATE, st)

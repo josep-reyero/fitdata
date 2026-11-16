@@ -113,6 +113,8 @@ def run(archive, capsys):
 def _fresh_logger():
     """Each CLI run in a test adds log handlers; drop them so tests do not see each other's logs."""
     import logging
+    from fitdata import safefs
+    safefs._reported.clear()  # each test sees its own warnings about skipped links
     yield
     log = logging.getLogger("fitdata")
     for h in list(log.handlers):

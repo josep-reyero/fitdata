@@ -17,6 +17,7 @@ from typing import Any
 
 from . import endpoints, fit, paths, storage
 from .errors import FitdataError
+from .validate import BadInput, check_activity_id, check_date
 from .client import NotLoggedIn, RateLimited, Session
 
 log = logging.getLogger("fitdata")
@@ -33,11 +34,9 @@ def _now() -> str:
 
 
 def write_json(path: Path, data: Any) -> None:
-    """A local file outside the archive (sync state)."""
+    """A local file outside the archive (sync state), written to a new file and moved into place."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False, default=str))
-    tmp.replace(path)
+    storage.write_new(path, json.dumps(data, indent=1, ensure_ascii=False, default=str).encode())
 
 
 def read_json(path: Path, default: Any = None) -> Any:
@@ -71,10 +70,11 @@ def _fetch(s: Session, fn, *args) -> tuple[str, Any, str | None]:
 
 
 # Safe unpacking of Garmin's downloads: only the plain file name of each entry is used (never its
-# folders), the name must be ordinary, and the total size is capped so a broken or hostile zip
-# can't write outside `dest` or fill the disk.
+# folders), the name must be ordinary, and the sizes are capped so a broken or hostile zip can't
+# write outside `dest`, fill the disk or the memory. Real FIT files are a few MB.
 UNZIP_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$")
-UNZIP_MAX_BYTES = 1024 * 1024 * 1024  # 1 GiB per download; real FIT downloads are a few MB
+UNZIP_MAX_FILE_BYTES = 64 * 1024 * 1024    # one unpacked file
+UNZIP_MAX_BYTES = 256 * 1024 * 1024        # everything unpacked from one download
 
 
 _write_new = storage.write_new
@@ -108,16 +108,23 @@ def _unzip(blob: bytes, dest: Path | tuple[storage.Archive, str]) -> list[str]:
                             "the first one.", name)
                 continue
 
-            def chunks(info=info):
+            def chunks(info=info, name=name):
                 nonlocal budget
+                size = 0
                 with z.open(info) as src:
                     while chunk := src.read(1024 * 1024):
                         budget -= len(chunk)
-                        if budget < 0:
+                        size += len(chunk)
+                        if size > UNZIP_MAX_FILE_BYTES or budget < 0:
+                            limit = (f"{UNZIP_MAX_FILE_BYTES // 2**20} MB for one file" if size > UNZIP_MAX_FILE_BYTES
+                                     else f"{UNZIP_MAX_BYTES // 2**20} MB for one download")
+                            log.warning("A Garmin download held %r, which unpacked to more than %s. That is "
+                                        "far larger than any real FIT file, so fitdata did not save it and stopped "
+                                        "unpacking this download; the next sync tries again.",
+                                        name, limit)
                             raise ValueError(
-                                f"A Garmin download unpacked to more than {UNZIP_MAX_BYTES // 2**20} MB, "
-                                "which is far larger than any real FIT file, so fitdata stopped unpacking "
-                                "it. The next sync will try again.")
+                                f"A Garmin download unpacked to more than {limit}, which is far larger than "
+                                "any real FIT file, so fitdata stopped unpacking it. The next sync will try again.")
                         yield chunk
 
             write(name, chunks())
@@ -207,7 +214,8 @@ def sync_day(s: Session, d: date, force: bool = False) -> dict[str, Any]:
     except Exception as e:
         sources["raw_wellness_fit"] = {"status": "error", "error": f"{type(e).__name__}: {str(e)[:300]}"}
 
-    settled = (date.today() - d).days >= SETTLE_DAYS
+    # A day with an activity entry that could not be used this run is fetched again next time.
+    settled = (date.today() - d).days >= SETTLE_DAYS and ds not in _skipped_days
     headline = _day_headline(proc, a)
     activities = _activity_folders(a, dkey)
     # Garmin returns zero-filled objects even for days before you had a watch, so "has data"
@@ -322,25 +330,81 @@ def sync_activity(s: Session, item: dict[str, Any], force: bool = False) -> str:
     return akey
 
 
+# An activity dated further ahead than this is a broken entry (time zones put a real one at most a
+# day ahead), not something to file under a future day.
+MAX_DAYS_AHEAD = 2
+# Days whose activity list had an entry that could not be used (this run): not marked complete.
+_skipped_days: set[str] = set()
+
+
+def _check_item(item: Any) -> tuple[str, str]:
+    """(activity id, local start) of one entry of Garmin's activity list, or BadInput saying why
+    it cannot be used. The entry comes from Garmin and is checked like any outside data."""
+    if not isinstance(item, dict):
+        raise BadInput(f"the entry is a {type(item).__name__}, not a record of an activity")
+    aid = item.get("activityId")
+    if isinstance(aid, bool) or not isinstance(aid, (int, str)):
+        raise BadInput("it has no usable activity id")
+    aid = check_activity_id(aid)
+    start = item.get("startTimeLocal")
+    if not isinstance(start, str):
+        raise BadInput(f"activity {aid} has no usable start time")
+    ds = check_date(start[:10], f"start date of activity {aid}")
+    if date.fromisoformat(ds) > date.today() + timedelta(days=MAX_DAYS_AHEAD):
+        _skipped_days.add(ds)
+        raise BadInput(f"activity {aid} is dated {ds}, more than {MAX_DAYS_AHEAD} days in the future")
+    atype = item.get("activityType")
+    if atype is not None and not (isinstance(atype, dict) and isinstance(atype.get("typeKey", ""), str)):
+        _skipped_days.add(ds)
+        raise BadInput(f"activity {aid} has an activity type fitdata cannot read")
+    return aid, start
+
+
+def _item_day(item: Any) -> str | None:
+    try:
+        return check_date(str(item.get("startTimeLocal"))[:10])
+    except (BadInput, AttributeError):
+        return None
+
+
 def sync_activities(s: Session, end: date, days: int, force: bool = False) -> int:
     start = end - timedelta(days=days - 1)
     items = s.call(lambda g, a, b: g.get_activities_by_date(a, b, sortorder="asc"), s.api, start.isoformat(), end.isoformat())
-    new = 0
+    if items is not None and not isinstance(items, list):
+        log.warning("Garmin's list of activities for %s..%s was not a list, so fitdata could not read it "
+                    "and fetched no activities from it. The next sync asks again.", start, end)
+        items = []
+    new = skipped = 0
     touched_days = set()
     a = storage.archive(write=True)
     for item in items or []:
-        existing = storage.find_activity(a, item["activityId"], (item.get("startTimeLocal") or "")[:10])
-        if existing and (a.read_json(f"{existing}/activity.json", {}) or {}).get("complete") and not force:
-            continue
-        sync_activity(s, item, force=force)
-        touched_days.add((item.get("startTimeLocal") or "")[:10])
-        new += 1
+        # One broken entry is logged and skipped; it never stops the other activities.
+        try:
+            aid, start_local = _check_item(item)
+            ds = start_local[:10]
+            existing = storage.find_activity(a, aid, ds)
+            if existing and (a.read_json(f"{existing}/activity.json", {}) or {}).get("complete") and not force:
+                continue
+            sync_activity(s, item, force=force)
+            touched_days.add(ds)
+            new += 1
+        except (BadInput, KeyError, TypeError, AttributeError, ValueError) as e:
+            skipped += 1
+            day = _item_day(item)
+            if day:
+                _skipped_days.add(day)
+            why = e.message if isinstance(e, BadInput) else f"its data had an unexpected shape ({type(e).__name__})"
+            log.warning("Skipped one entry of Garmin's activity list%s: %s. The other activities were "
+                        "fetched; %s", f" for {day}" if day else "", why,
+                        "that day stays incomplete, so a later sync tries again." if day
+                        else "the entry has no date, so it cannot be tied to a day.")
     for ds in touched_days:  # keep each day's list of activities current
         mk = f"{paths.day_key(ds)}/day.json"
         m = a.read_json(mk, {}) or {"date": ds}
         m["activities"] = _activity_folders(a, paths.day_key(ds))
         a.write_json(mk, m)
-    log.info("activities %s..%s: %d listed, %d fetched", start, end, len(items or []), new)
+    log.info("activities %s..%s: %d listed, %d fetched%s", start, end, len(items or []), new,
+             f", {skipped} skipped" if skipped else "")
     return new
 
 
@@ -403,9 +467,16 @@ def status() -> dict[str, Any]:
     days, acts, problem = [], 0, None
     try:
         a = storage.archive()
-        if a.kind == "files":  # cheaper than a full walk on a large archive
-            days = [p.name for p in paths.DAYS.glob("*/*") if (p / "day.json").exists()]
-            acts = len(list(paths.DAYS.glob("*/*/activities/*/activity.json")))
+        if a.kind == "files":  # cheaper than a full walk on a large archive; never follows links
+            for year in a.children(paths.DAYS_KEY)[0]:
+                for d in a.children(f"{paths.DAYS_KEY}/{year}")[0]:
+                    dkey = f"{paths.DAYS_KEY}/{year}/{d}"
+                    folders, files = a.children(dkey)
+                    if "day.json" in files:
+                        days.append(d)
+                    if "activities" in folders:
+                        acts += sum(1 for name in a.children(f"{dkey}/activities")[0]
+                                    if "activity.json" in a.children(f"{dkey}/activities/{name}")[1])
         else:
             for e in a.walk(paths.DAYS_KEY):
                 parts = e.key.split("/")

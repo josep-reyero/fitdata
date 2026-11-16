@@ -6,4 +6,10 @@ After=network-online.target
 Type=oneshot
 # 75 = temporary: another sync held the lock or Garmin was rate limiting. The next run carries on.
 SuccessExitStatus=75
+# The same limits as the job in project.toml: memory, time, and nothing it starts gains privileges.
+# UMask keeps the archive, the index and the logs readable by the owner only.
+MemoryMax=512M
+TimeoutStartSec=30m
+NoNewPrivileges=yes
+UMask=0077
 ExecStart=%h/.local/bin/fitdata --local sync --days 3
