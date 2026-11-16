@@ -23,6 +23,7 @@ from datetime import date
 from pathlib import Path
 
 from .config import load
+from .validate import check_activity_id, check_date
 
 ROOT: Path = load().data_dir
 GARMIN = ROOT / "garmin"
@@ -36,7 +37,8 @@ LOCK = STATE / "sync.lock"
 
 
 def day_dir(d: date | str) -> Path:
-    d = d if isinstance(d, str) else d.isoformat()
+    """The folder of one day. Refuses anything but a real YYYY-MM-DD date, so it stays inside DAYS."""
+    d = check_date(d if isinstance(d, str) else d.isoformat())
     return DAYS / d[:4] / d
 
 
@@ -45,11 +47,22 @@ def slug(text: str) -> str:
 
 
 def activity_dir(d: str, start_local: str, type_key: str, activity_id: int | str) -> Path:
-    hhmm = (start_local or "0000")[11:16].replace(":", "") or "0000"
-    return day_dir(d) / "activities" / f"{hhmm}-{slug(type_key)}-{activity_id}"
+    hhmm = re.sub(r"[^0-9]", "", (start_local or "0000")[11:16]) or "0000"
+    return day_dir(d) / "activities" / f"{hhmm}-{slug(type_key)}-{check_activity_id(activity_id)}"
 
 
 def find_activity_dir(activity_id: int | str) -> Path | None:
-    for p in DAYS.glob(f"*/*/activities/*-{activity_id}"):
+    # Digits only: a "*" or "../" in the id would otherwise widen the search or leave the archive.
+    for p in DAYS.glob(f"*/*/activities/*-{check_activity_id(activity_id)}"):
         return p
     return None
+
+
+def is_secret(path: Path) -> bool:
+    """True for anything inside .state/ (the saved Garmin login), even when reached through a
+    symlink. Read commands refuse such paths."""
+    try:
+        path.resolve().relative_to(STATE.resolve())
+        return True
+    except ValueError:
+        return False

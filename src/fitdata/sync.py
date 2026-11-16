@@ -6,6 +6,8 @@ from __future__ import annotations
 import io
 import json
 import logging
+import os
+import re
 import zipfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -60,20 +62,68 @@ def _fetch(s: Session, fn, *args) -> tuple[str, Any, str | None]:
     return ("empty" if _is_empty(data) else "ok"), data, None
 
 
+# Safe unpacking of Garmin's downloads: only the plain file name of each entry is used (never its
+# folders), the name must be ordinary, and the total size is capped so a broken or hostile zip
+# can't write outside `dest` or fill the disk.
+UNZIP_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$")
+UNZIP_MAX_BYTES = 1024 * 1024 * 1024  # 1 GiB per download; real FIT downloads are a few MB
+
+
+def _write_new(path: Path, chunks) -> int:
+    """Write to path.tmp (never following a symlink there), then move it into place."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.unlink(missing_ok=True)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
+    size = 0
+    try:
+        with os.fdopen(fd, "wb") as out:
+            for chunk in chunks:
+                out.write(chunk)
+                size += len(chunk)
+        tmp.replace(path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    return size
+
+
 def _unzip(blob: bytes, dest: Path) -> list[str]:
     dest.mkdir(parents=True, exist_ok=True)
-    names = []
     if blob[:2] != b"PK":  # a bare FIT file
-        name = "file.fit"
-        (dest / name).write_bytes(blob)
-        return [name]
+        _write_new(dest / "file.fit", [blob])
+        return ["file.fit"]
+    names: list[str] = []
+    seen: set[str] = set()  # case-folded: on macOS "ACT.FIT" and "act.fit" are the same file
+    budget = UNZIP_MAX_BYTES
     with zipfile.ZipFile(io.BytesIO(blob)) as z:
         for info in z.infolist():
             if info.is_dir():
                 continue
-            name = Path(info.filename).name
-            (dest / name).write_bytes(z.read(info))
+            name = info.filename.replace("\\", "/").rsplit("/", 1)[-1]
+            if not UNZIP_NAME_RE.fullmatch(name) or name.endswith(".tmp"):
+                log.warning("Skipped a file named %r in a Garmin download: the name is not a plain file "
+                            "name, so it was not saved. The other files were kept.", info.filename)
+                continue
+            if name.casefold() in seen:
+                log.warning("Skipped a second file named %r in a Garmin download so it would not replace "
+                            "the first one.", name)
+                continue
+
+            def chunks(info=info):
+                nonlocal budget
+                with z.open(info) as src:
+                    while chunk := src.read(1024 * 1024):
+                        budget -= len(chunk)
+                        if budget < 0:
+                            raise ValueError(
+                                f"A Garmin download unpacked to more than {UNZIP_MAX_BYTES // 2**20} MB, "
+                                "which is far larger than any real FIT file, so fitdata stopped unpacking "
+                                "it. The next sync will try again.")
+                        yield chunk
+
+            _write_new(dest / name, chunks())
             names.append(name)
+            seen.add(name.casefold())
     return sorted(names)
 
 
