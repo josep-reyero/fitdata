@@ -1,0 +1,15 @@
+# fitdata as an app: what the dashboards (my-easy-ui) may show.
+# The dashboards themselves are in ui/dashboards/; see ui/README.md.
+
+[app]
+name = "fitdata"
+title = "Fitness"
+
+[ui]
+# The index fitdata builds (`fitdata index`), relative to the app's data folder.
+data = "fitdata.sqlite"
+# Only these tables reach the dashboards. The files table (paths of stored files) stays out.
+tables = ["days", "activities"]
+accent = "#2a7f62"
+# The menu order; the first one (Today) opens when the page starts.
+dashboards = ["overview", "sleep", "activities", "trends"]
