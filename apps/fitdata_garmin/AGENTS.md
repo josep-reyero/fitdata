@@ -73,6 +73,9 @@ Guidelines:
   - `fit.py`: FIT decoding with Garmin's SDK.
   - `index.py`: its rows in the project's shared database (`fitdata.sqlite`), from `schema.sql`.
   - `schema.sql`: the exact text `mes db schema --sql` prints for the project's `project.toml`.
+    `index` runs its tables and indexes every time, and its views only when they are missing:
+    once they exist, `mes db sync` keeps them in line with the project's apps (a second app's rows
+    would otherwise disappear from them).
   - `query.py`: read-only queries, and the sandbox `sql` runs in.
   - `dashboards/`: its dashboards and the sections it adds to the project's Today page.
 - **The shared database:** the index writes only rows with `source = 'fitdata-garmin'` into

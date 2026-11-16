@@ -137,6 +137,10 @@ be one word (the default `~/.local/bin/fitdata` is). `fitdata login` needs a ter
 run it through a key without the gate, or at the machine itself.
 
 Environment overrides: `FITDATA_DATA_DIR`, `FITDATA_STORAGE`, `FITDATA_REMOTE` (`""` stays local).
+When mes runs fitdata-garmin (`mes jobs run`, `mes db rebuild`, its systemd units or its gate), it
+sets `MES_PROJECT=fitdata` and `MES_DATA_DIR`, and that folder is used instead of `data_dir`, so the
+app writes the same `fitdata.sqlite` that `mes db` and the dashboards read. To keep using your
+existing folder with mes, set `[projects.fitdata] data_dir` in mes's config to the same path.
 
 ## Collect
 

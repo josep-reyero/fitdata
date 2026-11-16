@@ -25,6 +25,9 @@ Environment overrides: FITDATA_DATA_DIR, FITDATA_STORAGE, FITDATA_REMOTE (host; 
 
 The archive's location is fitdata's own setting. my-easy-software (mes) and its dashboards find
 the same folder through `[projects.fitdata] data_dir` in ~/.config/mes/config.toml (see README).
+When mes itself runs the app (MES_PROJECT=fitdata with MES_DATA_DIR), MES_DATA_DIR is used instead
+of data_dir, so the app never writes a different fitdata.sqlite than the one mes and the dashboards
+read; FITDATA_DATA_DIR still wins over both.
 """
 from __future__ import annotations
 
@@ -60,6 +63,19 @@ class Config:
         return self.bucket_store or self.data_dir / "store"
 
 
+def _data_dir(raw: dict) -> Path:
+    """Where the archive lives, first match wins: FITDATA_DATA_DIR; MES_DATA_DIR when mes runs this
+    app for the fitdata project (its jobs, its gate and `mes db rebuild` set MES_PROJECT=fitdata
+    with it), so the app writes the same fitdata.sqlite that mes and the dashboards read; data_dir
+    in the config file; ~/.local/share/fitdata."""
+    if os.environ.get("FITDATA_DATA_DIR"):
+        return Path(os.environ["FITDATA_DATA_DIR"]).expanduser()
+    mes_dir = os.environ.get("MES_DATA_DIR")
+    if mes_dir and os.environ.get("MES_PROJECT") == "fitdata" and Path(mes_dir).is_absolute():
+        return Path(mes_dir)
+    return Path(raw.get("data_dir", DEFAULT_DATA_DIR)).expanduser()
+
+
 def config_path() -> Path:
     return Path(os.environ.get("FITDATA_CONFIG", "~/.config/fitdata/config.toml")).expanduser()
 
@@ -78,7 +94,7 @@ def load() -> Config:
     remote = raw.get("remote") or {}
     bucket = raw.get("bucket") or {}
     host = os.environ.get("FITDATA_REMOTE", remote.get("host")) or None
-    data_dir = Path(os.environ.get("FITDATA_DATA_DIR", raw.get("data_dir", DEFAULT_DATA_DIR))).expanduser()
+    data_dir = _data_dir(raw)
     storage = os.environ.get("FITDATA_STORAGE") or raw.get("storage") or "files"
     if storage not in STORAGE_KINDS:
         raise ConfigProblem(f"storage is set to {str(storage)[:40]!r} in {path} (or FITDATA_STORAGE), but "
@@ -105,7 +121,7 @@ def data_dir_only() -> Path:
         raw = tomllib.loads(config_path().read_text())
     except (OSError, tomllib.TOMLDecodeError):
         pass
-    return Path(os.environ.get("FITDATA_DATA_DIR", raw.get("data_dir", DEFAULT_DATA_DIR))).expanduser()
+    return _data_dir(raw)
 
 
 def _inside(path: Path, folder: Path) -> bool:

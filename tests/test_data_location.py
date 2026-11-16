@@ -1,5 +1,6 @@
-"""Where the archive lives: fitdata's own `data_dir`, always. mes and the dashboards find the same
-folder through `[projects.fitdata] data_dir` in ~/.config/mes/config.toml. No symlinks."""
+"""Where the archive lives: fitdata's own `data_dir`. mes and the dashboards find the same folder
+through `[projects.fitdata] data_dir` in ~/.config/mes/config.toml. When mes runs the app (MES_PROJECT
+is fitdata and MES_DATA_DIR is set), mes's folder wins, so all three read one file. No symlinks."""
 from __future__ import annotations
 
 import json
@@ -64,3 +65,34 @@ def test_easy_ui_finds_the_index_through_the_override(two_configs):
     index.rebuild()
     cfg = appconfig.load(REPO)
     assert cfg.source_db() == archive / UI_DATA and cfg.source_db().is_file()
+
+
+def test_mes_runs_use_mes_data_dir(two_configs, tmp_path, monkeypatch):
+    """When mes runs the app for this project (a job, the gate, mes db rebuild), it passes
+    MES_PROJECT=fitdata and MES_DATA_DIR; the app then writes exactly where mes db and easy-ui
+    read, even if fitdata's own config names another folder."""
+    import importlib
+
+    from fitdata_garmin import config
+
+    mes_dir = tmp_path / "mes-data" / "fitdata"
+    monkeypatch.setenv("MES_DATA_DIR", str(mes_dir))
+    monkeypatch.setenv("MES_PROJECT", "fitdata")
+    config.load.cache_clear()
+    importlib.reload(paths)
+    assert paths.ROOT == mes_dir and config.load().data_dir == mes_dir
+    index.rebuild()
+    assert (mes_dir / UI_DATA).is_file()
+
+    # Another project's session is not ours: fitdata's own data_dir again.
+    monkeypatch.setenv("MES_PROJECT", "other")
+    config.load.cache_clear()
+    importlib.reload(paths)
+    assert paths.ROOT == two_configs[0]
+
+    # FITDATA_DATA_DIR always wins.
+    monkeypatch.setenv("MES_PROJECT", "fitdata")
+    monkeypatch.setenv("FITDATA_DATA_DIR", str(tmp_path / "explicit"))
+    config.load.cache_clear()
+    importlib.reload(paths)
+    assert paths.ROOT == tmp_path / "explicit"
