@@ -91,11 +91,11 @@ def test_fixture_has_realistic_gaps():
     assert one("SELECT count(*) FROM days WHERE complete = 0") == 2  # the last two days still settle
 
 
-def test_app_toml_allows_only_days_and_activities():
-    app = tomllib.loads((REPO / "app.toml").read_text())
-    assert app["app"] == {"name": "fitdata", "title": "Fitness"}
-    assert app["ui"]["data"] == "fitdata.sqlite"
-    assert app["ui"]["tables"] == ["days", "activities"]
+def test_project_toml_allows_only_days_and_activities():
+    project = tomllib.loads((REPO / "project.toml").read_text())
+    assert project["project"]["name"] == "fitdata" and project["project"]["title"] == "Fitness"
+    assert project["ui"]["data"] == "fitdata.sqlite"
+    assert project["ui"]["tables"] == ["days", "activities"]
 
 
 # ------------------------------------------------------------------ dashboards (needs my-easy-ui)
@@ -278,8 +278,8 @@ def test_dashboards_cope_with_an_empty_archive(easyui, tmp_path):
 
 
 def test_menu_order_names_every_dashboard_once():
-    app = tomllib.loads((REPO / "app.toml").read_text())
-    order = app["ui"]["dashboards"]
+    project = tomllib.loads((REPO / "project.toml").read_text())
+    order = project["ui"]["dashboards"]
     files = sorted(p.stem for p in (REPO / "ui" / "dashboards").glob("*.yaml"))
     assert order[0] == "overview" and sorted(order) == files
 

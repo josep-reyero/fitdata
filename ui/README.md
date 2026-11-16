@@ -16,7 +16,7 @@ Every page has a **Days** control (7, 30, 90 or 365 days). The period ends on th
 day the watch synced, not on the calendar date, so a late sync never shows an empty page.
 Days without a reading are left out of averages and show as gaps or dashes, never as zero.
 
-`../app.toml` tells easy-ui which data it may read. Only the `days` and `activities` tables of
+`[ui]` in `../project.toml` tells easy-ui which data it may read. Only the `days` and `activities` tables of
 the index are copied for the dashboards. The `files` table stays out.
 
 ## Try it with the sample data
@@ -39,7 +39,7 @@ of seconds. To try the whole journey (data build, publish, sign-in) with the sam
 throwaway folders:
 
 ```sh
-export MES_DATA_HOME="$(mktemp -d)" EASYUI_STATE_HOME="$(mktemp -d)"
+export MES_DATA_HOME="$(mktemp -d)" EASYUI_STATE_HOME="$(mktemp -d)" MES_CONFIG="$(mktemp -d)/none.toml"
 mkdir -p "$MES_DATA_HOME/fitdata"
 cp ui/fixtures/fitdata-sample.db "$MES_DATA_HOME/fitdata/fitdata.sqlite"
 easy-ui data build      # copy the allowed tables into the dashboard data
@@ -51,19 +51,29 @@ easy-ui serve           # http://127.0.0.1:8765, until you press Ctrl-C
 
 ## Use it with your own data
 
-easy-ui looks for the index at `$MES_DATA_HOME/fitdata/fitdata.sqlite`, which is
-`~/.local/share/mes/fitdata/fitdata.sqlite` by default. fitdata keeps its archive where its own
-config says (`data_dir` in `~/.config/fitdata/config.toml`, by default `~/.local/share/fitdata`),
-and the two do not line up by themselves yet. For now, tell easy-ui where the data is in one of
-these ways:
+fitdata keeps its archive where its own config says: `data_dir` in
+`~/.config/fitdata/config.toml` (by default `~/.local/share/fitdata`). That stays the one place
+the location is decided. Tell mes and easy-ui about the same folder with one table in
+`~/.config/mes/config.toml` (or `$MES_CONFIG`):
 
-- If `data_dir` is the default `~/.local/share/fitdata`, set `MES_DATA_HOME=~/.local/share`.
-- Otherwise, link the folder: `mkdir -p ~/.local/share/mes && ln -s <your data_dir> ~/.local/share/mes/fitdata`.
-- A `--data-dir` option is planned for easy-ui. It is not in easy-ui v0.1 yet.
+```toml
+[projects.fitdata]
+data_dir = "~/fitness/data"     # exactly fitdata's data_dir
+```
+
+`fitdata status` prints these lines with this machine's folder filled in. easy-ui then reads the
+index at `<data_dir>/fitdata.sqlite` (`[ui] data` in `../project.toml`). No symbolic link is
+needed, and nothing is moved. Without the table, easy-ui looks in the mes default,
+`~/.local/share/mes/fitdata/`, which is not where fitdata writes.
+
+The index is the same whether fitdata stores its files as plain files or in a bucket
+(`storage` in fitdata's config), so the dashboards do not change with it.
 
 easy-ui only reads the index; it never changes your archive. Every `fitdata sync` (and
 `fitdata index`) rebuilds the index, so run `easy-ui data build` after it to show the new data.
-If nothing changed, the build keeps the current data and open pages do not reload.
+If nothing changed, the build keeps the current data and open pages do not reload. Run as a mes
+project, this happens by itself: `[ui] refresh_after` lists the three jobs, so mes rebuilds the
+dashboard data after each successful run.
 
 ## Change a dashboard
 
@@ -85,7 +95,7 @@ Tips that keep the numbers honest:
 - Give a stat with a change `better: higher` or `better: lower` (resting heart rate: lower), so
   a change for the worse does not look like good news.
 - Times in seconds use `format: duration`, which reads "7 h 07 min", never like a clock time.
-- The menu order is `[ui] dashboards` in `../app.toml`; the first one opens at the start.
+- The menu order is `[ui] dashboards` in `../project.toml`; the first one opens at the start.
 
 ## Sample data and tests
 

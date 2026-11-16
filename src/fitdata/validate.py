@@ -9,6 +9,8 @@ from __future__ import annotations
 import re
 from datetime import date
 
+from .errors import USAGE, FitdataError
+
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 ACTIVITY_ID_RE = re.compile(r"^[0-9]{1,20}$")
 SOURCE_RE = re.compile(r"^[a-z0-9_]+$")
@@ -20,8 +22,11 @@ REMOTE_HOST_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.@:%-]*$")
 REMOTE_COMMAND_RE = re.compile(r"^[A-Za-z0-9_./~+:=-]+( [A-Za-z0-9_./~+:=-]+)*$")
 
 
-class BadInput(ValueError):
-    """A value given to fitdata was refused. The message says why and what to do instead."""
+class BadInput(FitdataError, ValueError):
+    """A value given to fitdata was refused (exit 2). The message says why and what to do instead."""
+
+    exit_code = USAGE
+    kind = "bad_input"
 
 
 def check_date(value: str, what: str = "date") -> str:

@@ -1,20 +1,23 @@
 """Fetch from Garmin Connect into the per-day folders. Safe to re-run: complete days and
 activities are skipped; recent days are refreshed because Garmin keeps updating them
-(sleep, HRV and readiness land the next morning)."""
+(sleep, HRV and readiness land the next morning).
+
+Every file under garmin/ is written through storage.archive(write=True), by key, so the same code
+fills a plain-files archive or a bucket. Sync state (.state/) is always a plain local file."""
 from __future__ import annotations
 
 import io
 import json
 import logging
-import os
 import re
 import zipfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from . import endpoints, fit, paths
-from .client import NotLoggedIn, Session
+from . import endpoints, fit, paths, storage
+from .errors import FitdataError
+from .client import NotLoggedIn, RateLimited, Session
 
 log = logging.getLogger("fitdata")
 
@@ -30,6 +33,7 @@ def _now() -> str:
 
 
 def write_json(path: Path, data: Any) -> None:
+    """A local file outside the archive (sync state)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False, default=str))
@@ -51,11 +55,15 @@ def _is_empty(data: Any) -> bool:
     return False
 
 
+# Problems that stop the whole run instead of being recorded against one source.
+STOP = (NotLoggedIn, RateLimited)
+
+
 def _fetch(s: Session, fn, *args) -> tuple[str, Any, str | None]:
     """-> (status, data, error). status: ok | empty | error."""
     try:
         data = s.call(fn, s.api, *args)
-    except NotLoggedIn:
+    except STOP:
         raise
     except Exception as e:  # Garmin answers "no data" in many ways (404, 204, errors)
         return "error", None, f"{type(e).__name__}: {str(e)[:300]}"
@@ -69,28 +77,19 @@ UNZIP_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$")
 UNZIP_MAX_BYTES = 1024 * 1024 * 1024  # 1 GiB per download; real FIT downloads are a few MB
 
 
-def _write_new(path: Path, chunks) -> int:
-    """Write to path.tmp (never following a symlink there), then move it into place."""
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.unlink(missing_ok=True)
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
-    size = 0
-    try:
-        with os.fdopen(fd, "wb") as out:
-            for chunk in chunks:
-                out.write(chunk)
-                size += len(chunk)
-        tmp.replace(path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
-    return size
+_write_new = storage.write_new
 
 
-def _unzip(blob: bytes, dest: Path) -> list[str]:
-    dest.mkdir(parents=True, exist_ok=True)
+def _unzip(blob: bytes, dest: Path | tuple[storage.Archive, str]) -> list[str]:
+    """Unpack a Garmin download into a folder: a Path, or (archive, folder key)."""
+    if isinstance(dest, Path):
+        dest.mkdir(parents=True, exist_ok=True)
+        write = lambda name, chunks: _write_new(dest / name, chunks)  # noqa: E731
+    else:
+        a, prefix = dest
+        write = lambda name, chunks: a.write(f"{prefix}/{name}", chunks)  # noqa: E731
     if blob[:2] != b"PK":  # a bare FIT file
-        _write_new(dest / "file.fit", [blob])
+        write("file.fit", [blob])
         return ["file.fit"]
     names: list[str] = []
     seen: set[str] = set()  # case-folded: on macOS "ACT.FIT" and "act.fit" are the same file
@@ -121,7 +120,7 @@ def _unzip(blob: bytes, dest: Path) -> list[str]:
                                 "it. The next sync will try again.")
                         yield chunk
 
-            _write_new(dest / name, chunks())
+            write(name, chunks())
             names.append(name)
             seen.add(name.casefold())
     return sorted(names)
@@ -140,14 +139,19 @@ def _pick(d: dict | None, *keys: str) -> Any:
     return cur
 
 
-def _day_headline(proc: Path) -> dict[str, Any]:
-    """A few key numbers copied into day.json for quick reading (full data stays in processed/)."""
-    summ = read_json(proc / "daily_summary.json") or {}
-    sleep = read_json(proc / "sleep.json") or {}
-    hrv = read_json(proc / "hrv.json") or {}
-    ready = read_json(proc / "training_readiness.json")
-    maxm = read_json(proc / "max_metrics.json")
-    status = read_json(proc / "training_status.json") or {}
+def _day_headline(proc: Path | str, a: storage.Archive | None = None) -> dict[str, Any]:
+    """A few key numbers copied into day.json for quick reading (full data stays in processed/).
+    `proc` is the processed/ folder: a key in archive `a`, or a local Path."""
+    def get(name: str) -> Any:
+        if a is None:
+            return read_json(Path(proc) / f"{name}.json")
+        return a.read_json(f"{proc}/{name}.json")
+    summ = get("daily_summary") or {}
+    sleep = get("sleep") or {}
+    hrv = get("hrv") or {}
+    ready = get("training_readiness")
+    maxm = get("max_metrics")
+    status = get("training_status") or {}
     return {
         "steps": summ.get("totalSteps"),
         "distance_m": summ.get("totalDistanceMeters"),
@@ -172,39 +176,44 @@ def _day_headline(proc: Path) -> dict[str, Any]:
     }
 
 
+def _activity_folders(a: storage.Archive, dkey: str) -> list[str]:
+    return a.children(f"{dkey}/activities")[0]
+
+
 def sync_day(s: Session, d: date, force: bool = False) -> dict[str, Any]:
+    a = storage.archive(write=True)
     ds = d.isoformat()
-    ddir = paths.day_dir(ds)
-    manifest_path = ddir / "day.json"
-    manifest = read_json(manifest_path, {}) or {}
+    dkey = paths.day_key(ds)
+    manifest_key = f"{dkey}/day.json"
+    manifest = a.read_json(manifest_key, {}) or {}
     if manifest.get("complete") and not force:
         return manifest
 
-    proc = ddir / "processed"
+    proc = f"{dkey}/processed"
     sources: dict[str, Any] = {}
     for name, fn in endpoints.DAILY.items():
         status, data, err = _fetch(s, fn, ds)
         if status != "error":
-            write_json(proc / f"{name}.json", data)
+            a.write_json(f"{proc}/{name}.json", data)
         sources[name] = {"status": status, **({"error": err} if err else {})}
 
     # The watch's original all-day FIT files for this date.
-    raw = ddir / "raw" / "wellness"
     try:
         blob = s.call(lambda g, x: g.download_health_snapshot(x), s.api, ds)
-        files = _unzip(blob, raw) if blob else []
+        files = _unzip(blob, (a, f"{dkey}/raw/wellness")) if blob else []
         sources["raw_wellness_fit"] = {"status": "ok" if files else "empty", "files": files}
-    except NotLoggedIn:
+    except STOP:
         raise
     except Exception as e:
         sources["raw_wellness_fit"] = {"status": "error", "error": f"{type(e).__name__}: {str(e)[:300]}"}
 
     settled = (date.today() - d).days >= SETTLE_DAYS
-    headline = _day_headline(proc)
+    headline = _day_headline(proc, a)
+    activities = _activity_folders(a, dkey)
     # Garmin returns zero-filled objects even for days before you had a watch, so "has data"
     # means real recordings: raw files, steps, or heart rate.
     has_data = bool(sources["raw_wellness_fit"].get("files")) or bool(headline.get("steps")) \
-        or headline.get("resting_hr") is not None or (ddir / "activities").exists()
+        or headline.get("resting_hr") is not None or bool(activities)
     manifest.update({
         "date": ds,
         "fetched_at": _now(),
@@ -212,10 +221,10 @@ def sync_day(s: Session, d: date, force: bool = False) -> dict[str, Any]:
         "has_data": has_data,
         "headline": headline,
         "sources": sources,
-        "activities": sorted(p.name for p in (ddir / "activities").glob("*") if p.is_dir()),
+        "activities": activities,
         "layout_version": VERSION,
     })
-    write_json(manifest_path, manifest)
+    a.write_json(manifest_key, manifest)
     ok = sum(1 for v in sources.values() if v["status"] == "ok")
     log.info("day %s: %d/%d sources with data%s", ds, ok, len(sources), " (complete)" if settled else "")
     return manifest
@@ -256,31 +265,33 @@ def _activity_headline(summary: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def sync_activity(s: Session, item: dict[str, Any], force: bool = False) -> Path:
+def sync_activity(s: Session, item: dict[str, Any], force: bool = False) -> str:
+    """Fetch one activity into its folder; returns the folder's key."""
+    a = storage.archive(write=True)
     aid = item["activityId"]
     start = item.get("startTimeLocal") or ""
     d = start[:10]
-    adir = paths.find_activity_dir(aid) or paths.activity_dir(d, start, (item.get("activityType") or {}).get("typeKey", ""), aid)
-    manifest_path = adir / "activity.json"
-    manifest = read_json(manifest_path, {}) or {}
+    akey = storage.find_activity(a, aid, d) or paths.activity_key(d, start, (item.get("activityType") or {}).get("typeKey", ""), aid)
+    manifest_key = f"{akey}/activity.json"
+    manifest = a.read_json(manifest_key, {}) or {}
     if manifest.get("complete") and not force:
-        return adir
+        return akey
 
-    write_json(adir / "processed" / "list_entry.json", item)
+    a.write_json(f"{akey}/processed/list_entry.json", item)
     sources: dict[str, Any] = {}
     for name, fn in endpoints.ACTIVITY.items():
         status, data, err = _fetch(s, fn, aid)
         if status != "error":
-            write_json(adir / "processed" / f"{name}.json", data)
+            a.write_json(f"{akey}/processed/{name}.json", data)
         sources[name] = {"status": status, **({"error": err} if err else {})}
 
     # Original upload from the watch (FIT, inside a zip).
     files: list[str] = []
     try:
         blob = s.call(lambda g, x: g.download_activity(x, dl_fmt=g.ActivityDownloadFormat.ORIGINAL), s.api, aid)
-        files = _unzip(blob, adir / "raw")
+        files = _unzip(blob, (a, f"{akey}/raw"))
         sources["raw_fit"] = {"status": "ok", "files": files}
-    except NotLoggedIn:
+    except STOP:
         raise
     except Exception as e:
         sources["raw_fit"] = {"status": "error", "error": f"{type(e).__name__}: {str(e)[:300]}"}
@@ -289,11 +300,14 @@ def sync_activity(s: Session, item: dict[str, Any], force: bool = False) -> Path
     fits = [f for f in files if f.lower().endswith(".fit")]
     if fits:
         try:
-            derived = fit.derive_activity(adir / "raw" / fits[0], adir / "derived")
+            data = a.read(f"{akey}/raw/{fits[0]}") or b""
+            derived = fit.derive_activity(data, a, f"{akey}/derived", fits[0])
+        except STOP:
+            raise
         except Exception as e:
             derived = {"error": f"{type(e).__name__}: {e}"}
 
-    summary = read_json(adir / "processed" / "summary.json") or item
+    summary = a.read_json(f"{akey}/processed/summary.json") or item
     manifest.update({
         **_activity_headline(summary),
         "date": d,
@@ -303,9 +317,9 @@ def sync_activity(s: Session, item: dict[str, Any], force: bool = False) -> Path
         "derived": derived,
         "layout_version": VERSION,
     })
-    write_json(manifest_path, manifest)
+    a.write_json(manifest_key, manifest)
     log.info("activity %s %s %s: %s", d, manifest.get("type"), aid, manifest.get("name"))
-    return adir
+    return akey
 
 
 def sync_activities(s: Session, end: date, days: int, force: bool = False) -> int:
@@ -313,18 +327,19 @@ def sync_activities(s: Session, end: date, days: int, force: bool = False) -> in
     items = s.call(lambda g, a, b: g.get_activities_by_date(a, b, sortorder="asc"), s.api, start.isoformat(), end.isoformat())
     new = 0
     touched_days = set()
+    a = storage.archive(write=True)
     for item in items or []:
-        existing = paths.find_activity_dir(item["activityId"])
-        if existing and (read_json(existing / "activity.json", {}) or {}).get("complete") and not force:
+        existing = storage.find_activity(a, item["activityId"], (item.get("startTimeLocal") or "")[:10])
+        if existing and (a.read_json(f"{existing}/activity.json", {}) or {}).get("complete") and not force:
             continue
         sync_activity(s, item, force=force)
         touched_days.add((item.get("startTimeLocal") or "")[:10])
         new += 1
     for ds in touched_days:  # keep each day's list of activities current
-        mp = paths.day_dir(ds) / "day.json"
-        m = read_json(mp, {}) or {"date": ds}
-        m["activities"] = sorted(p.name for p in (paths.day_dir(ds) / "activities").glob("*") if p.is_dir())
-        write_json(mp, m)
+        mk = f"{paths.day_key(ds)}/day.json"
+        m = a.read_json(mk, {}) or {"date": ds}
+        m["activities"] = _activity_folders(a, paths.day_key(ds))
+        a.write_json(mk, m)
     log.info("activities %s..%s: %d listed, %d fetched", start, end, len(items or []), new)
     return new
 
@@ -332,10 +347,11 @@ def sync_activities(s: Session, end: date, days: int, force: bool = False) -> in
 # ------------------------------------------------------------------ account, recent, backfill
 
 def sync_account(s: Session) -> None:
+    a = storage.archive(write=True)
     for name, fn in endpoints.ACCOUNT.items():
         status, data, err = _fetch(s, fn)
         if status != "error":
-            write_json(paths.ACCOUNT / f"{name}.json", data)
+            a.write_json(f"{paths.ACCOUNT_KEY}/{name}.json", data)
         log.info("account %s: %s%s", name, status, f" ({err})" if err else "")
 
 
@@ -359,8 +375,9 @@ def backfill(s: Session, max_days: int, until: str | None = None) -> None:
     floor = date.fromisoformat(until or state.get("backfill_floor") or "2000-01-01")
     d = date.today() - timedelta(days=1)
     done, empty_run = 0, 0
+    a = storage.archive(write=True)
     while d >= floor and done < max_days:
-        m = read_json(paths.day_dir(d) / "day.json", {}) or {}
+        m = a.read_json(f"{paths.day_key(d)}/day.json", {}) or {}
         if not m.get("complete"):
             if done % 30 == 0:  # activities for the next month of history, in one listing
                 sync_activities(s, d, 31)
@@ -379,14 +396,50 @@ def backfill(s: Session, max_days: int, until: str | None = None) -> None:
 
 # ------------------------------------------------------------------ reading
 
-def status() -> int:
+def status() -> dict[str, Any]:
+    from .config import load
+    cfg = load()
     state = read_json(paths.STATE / "sync-state.json", {}) or {}
-    days = sorted(p.name for p in paths.DAYS.glob("*/*") if (p / "day.json").exists())
-    acts = list(paths.DAYS.glob("*/*/activities/*/activity.json"))
-    print(f"root:        {paths.ROOT}")
-    print(f"login:       {'saved' if paths.TOKENS.exists() else 'missing (run fitdata login)'}")
-    print(f"days:        {len(days)}" + (f"  ({days[0]} .. {days[-1]})" if days else ""))
-    print(f"activities:  {len(acts)}")
-    print(f"last sync:   {state.get('last_sync', 'never')}")
-    print(f"backfill:    last run {state.get('backfill_last_run', 'never')}; floor {state.get('backfill_floor', 'not reached')}")
-    return 0
+    days, acts, problem = [], 0, None
+    try:
+        a = storage.archive()
+        if a.kind == "files":  # cheaper than a full walk on a large archive
+            days = [p.name for p in paths.DAYS.glob("*/*") if (p / "day.json").exists()]
+            acts = len(list(paths.DAYS.glob("*/*/activities/*/activity.json")))
+        else:
+            for e in a.walk(paths.DAYS_KEY):
+                parts = e.key.split("/")
+                if len(parts) == 5 and parts[4] == "day.json":
+                    days.append(parts[3])
+                elif len(parts) == 7 and parts[4] == "activities" and parts[6] == "activity.json":
+                    acts += 1
+    except FitdataError as e:  # say what is wrong instead of failing the overview
+        days, acts, problem = [], 0, e.message
+    days.sort()
+    return {
+        "root": str(paths.ROOT),
+        "storage": cfg.storage if cfg.storage == "files" else f"bucket {cfg.bucket_name} in {cfg.store_dir}",
+        "login": "saved" if paths.TOKENS.exists() else "missing (run fitdata login)",
+        "days": len(days), "first_day": days[0] if days else None, "last_day": days[-1] if days else None,
+        "activities": acts,
+        "last_sync": state.get("last_sync"),
+        "backfill_last_run": state.get("backfill_last_run"),
+        "backfill_floor": state.get("backfill_floor"),
+        "index": str(paths.DB) if paths.DB.exists() else None,
+        # How mes and its dashboards find this archive (in ~/.config/mes/config.toml; no symlinks).
+        "mes_config": f"[projects.fitdata]\ndata_dir = {json.dumps(str(paths.ROOT))}\n",
+        "problem": problem,
+    }
+
+
+def print_status(st: dict[str, Any]) -> None:
+    print(f"root:        {st['root']}")
+    print(f"storage:     {st['storage']}")
+    print(f"login:       {st['login']}")
+    print(f"days:        {st['days']}" + (f"  ({st['first_day']} .. {st['last_day']})" if st["days"] else ""))
+    print(f"activities:  {st['activities']}")
+    print(f"last sync:   {st['last_sync'] or 'never'}")
+    print(f"backfill:    last run {st['backfill_last_run'] or 'never'}; floor {st['backfill_floor'] or 'not reached'}")
+    print(f"dashboards:  in ~/.config/mes/config.toml: {' '.join(st['mes_config'].split())}")
+    if st["problem"]:
+        print(f"problem:     {st['problem']}")

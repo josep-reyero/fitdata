@@ -15,6 +15,12 @@ index is rebuilt from them at any time.
     <data_dir>/fitdata.sqlite                 index: days, activities, files
     <data_dir>/.state/                        login token, sync state, lock (owner-only)
     <data_dir>/logs/fitdata.log
+    <data_dir>/store/                         only with storage = "bucket" (see storage.py)
+
+Everything under garmin/ is reached through `storage.archive()`, by key: a key is the file's path
+relative to data_dir, written with "/" (for example garmin/days/2026/2026-11-14/day.json), so the
+same keys work whether the archive is plain files or a my-bucket-storage bucket. The index, the
+logs and .state/ are always plain files.
 """
 from __future__ import annotations
 
@@ -22,10 +28,10 @@ import re
 from datetime import date
 from pathlib import Path
 
-from .config import load
+from .config import data_dir_only
 from .validate import check_activity_id, check_date
 
-ROOT: Path = load().data_dir
+ROOT: Path = data_dir_only()
 GARMIN = ROOT / "garmin"
 DAYS = GARMIN / "days"
 ACCOUNT = GARMIN / "account"
@@ -36,19 +42,36 @@ TOKENS = STATE / "garmin-tokens.json"
 LOCK = STATE / "sync.lock"
 
 
+DAYS_KEY = "garmin/days"
+ACCOUNT_KEY = "garmin/account"
+
+
+def day_key(d: date | str) -> str:
+    """The key (folder) of one day. Refuses anything but a real YYYY-MM-DD date."""
+    d = check_date(d if isinstance(d, str) else d.isoformat())
+    return f"{DAYS_KEY}/{d[:4]}/{d}"
+
+
 def day_dir(d: date | str) -> Path:
     """The folder of one day. Refuses anything but a real YYYY-MM-DD date, so it stays inside DAYS."""
-    d = check_date(d if isinstance(d, str) else d.isoformat())
-    return DAYS / d[:4] / d
+    return ROOT / day_key(d)
 
 
 def slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", (text or "activity").lower()).strip("_") or "activity"
 
 
-def activity_dir(d: str, start_local: str, type_key: str, activity_id: int | str) -> Path:
+def activity_key(d: str, start_local: str, type_key: str, activity_id: int | str) -> str:
     hhmm = re.sub(r"[^0-9]", "", (start_local or "0000")[11:16]) or "0000"
-    return day_dir(d) / "activities" / f"{hhmm}-{slug(type_key)}-{check_activity_id(activity_id)}"
+    return f"{day_key(d)}/activities/{hhmm}-{slug(type_key)}-{check_activity_id(activity_id)}"
+
+
+def activity_dir(d: str, start_local: str, type_key: str, activity_id: int | str) -> Path:
+    return ROOT / activity_key(d, start_local, type_key, activity_id)
+
+
+# A stored activity folder: garmin/days/YYYY/YYYY-MM-DD/activities/<HHMM>-<type>-<id>
+ACTIVITY_KEY_RE = re.compile(r"^garmin/days/\d{4}/\d{4}-\d{2}-\d{2}/activities/[0-9]{1,4}-[a-z0-9_]+-([0-9]{1,20})$")
 
 
 def find_activity_dir(activity_id: int | str) -> Path | None:

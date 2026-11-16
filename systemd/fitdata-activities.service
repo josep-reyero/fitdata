@@ -4,4 +4,6 @@ After=network-online.target
 
 [Service]
 Type=oneshot
+# 75 = temporary: another sync held the lock or Garmin was rate limiting. The next run carries on.
+SuccessExitStatus=75
 ExecStart=%h/.local/bin/fitdata --local activities-sync --days 2

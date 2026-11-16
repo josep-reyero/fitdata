@@ -8,6 +8,7 @@ import pytest
 
 from conftest import ACTIVITY_ID, DAY, TOKEN_TEXT
 from fitdata import paths, query
+from fitdata.errors import NotFound
 from fitdata.validate import BadInput
 
 TOKEN_FROM_DAY = "../../../../../.state/garmin-tokens"
@@ -84,13 +85,13 @@ def test_symlink_to_token_is_not_read(archive):
     """Even a known source name won't read the token if the file is a link to it."""
     proc = paths.day_dir(DAY) / "processed"
     os.symlink(paths.TOKENS, proc / "hrv.json")
-    with pytest.raises(SystemExit) as e:
+    with pytest.raises(NotFound) as e:  # exit 3: as if the file were not there
         query.day(DAY, "hrv")
     assert TOKEN_TEXT not in str(e.value)
     records = paths.find_activity_dir(ACTIVITY_ID) / "derived" / "records.csv"
     records.unlink()
     os.symlink(paths.TOKENS, records)
-    with pytest.raises(SystemExit):
+    with pytest.raises(NotFound):
         query.activity(ACTIVITY_ID, records=True)
 
 

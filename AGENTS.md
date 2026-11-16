@@ -24,7 +24,8 @@ fitdata --json activity <id> --source splits
 fitdata --json activity <id> --records --every 10 --columns timestamp,heart_rate,enhanced_speed,enhanced_altitude
 fitdata --json sources                          # what each source means
 fitdata --json schema                           # index tables/columns, then:
-fitdata --json sql "SELECT ... FROM days|activities|files ..."   # read-only
+fitdata --json sql "SELECT ... FROM days|activities|files ..."   # read-only, 1000 rows unless --limit N
+fitdata --json describe                         # every command, its kind (read/write/admin) and arguments
 ```
 
 Guidelines:
@@ -36,25 +37,48 @@ Guidelines:
 - **Garmin's metrics:** numbers like Training Effect, load, VO2 max, readiness and Body Battery
   are Garmin's own calculations. Say so when you use them, and prefer trends over single days.
 - **Freshness:** `fitdata status` shows the last sync. Recent days refresh several times a day.
+- **Rows:** `fitdata sql` returns at most 1000 rows by default and says on stderr when there are
+  more; aggregate in SQL or pass `--limit N` rather than pulling everything.
+- **Exit codes:** 0 ok, 1 error, 2 usage (fix the command), 3 not found, 4 not allowed (your
+  `MES_ALLOW` level is too low: ask the person), 5 refused for safety, 6 needs a person (with
+  `--json`, stdout has a `needs_human` result: show its `action`, for example "run `fitdata
+  login`", then `rerun`), 75 temporary (Garmin rate limit or a sync running: try later).
+- **Kinds:** query commands are `read`; `sync`, `backfill`, `index`, `migrate-storage` change
+  data (`write`); `login` is `admin` and always needs the person at a terminal.
 - **Privacy:** never copy personal data into this repo, issues, or commits.
 
 ## Working on the code
 
+- fitdata is a mes project: [`project.toml`](project.toml) names the app (`[apps.fitdata]`),
+  its three jobs (`[jobs.*]`, kept in step with `systemd/`, which is the standalone way to run
+  them; `tests/test_project.py` checks they match) and what the dashboards may read (`[ui]`).
+  fitdata does not import mes; it answers `describe` in the same shape.
 - Layout: `src/fitdata/`.
-  - `cli.py`: commands, `--json`, SSH forwarding.
-  - `config.py`: the per-machine TOML config.
-  - `paths.py`: archive layout.
+  - `cli.py`: commands, `--json`, SSH forwarding, MES_ALLOW check, exit codes.
+  - `describe.py`: command kinds, `describe`, MES_ALLOW. A new command needs a kind here.
+  - `errors.py`: error classes and their exit codes.
+  - `config.py`: the per-machine TOML config (`data_dir`, `storage`, `[bucket]`, `[remote]`).
+  - `paths.py`: archive layout, as Paths and as storage keys.
+  - `storage.py`: the one interface to the archive files (plain files or a bucket); key checks.
+  - `migrate.py`: `migrate-storage` (copy, verify by SHA-256, switch, never delete).
   - `endpoints.py`: every Garmin source fetched, with descriptions.
   - `sync.py`: downloading and manifests.
   - `fit.py`: FIT decoding with Garmin's SDK.
   - `index.py`: the SQLite index.
   - `query.py`: read-only queries.
+- **Archive access goes through `storage.archive()`** (read-only) or `storage.archive(write=True)`,
+  by key (`garmin/days/...`), never by building a path under data_dir. Keys are checked in
+  `storage.check_key`; nothing can name `.state/`, and the saved login never enters a bucket.
 - **No personal data in the repo:** no names, emails, hostnames, paths of a real machine,
   tokens or sample data from a real account. Machine specifics belong in
   `~/.config/fitdata/config.toml`.
-- **Files are the source of truth.** The SQLite index is derived; `fitdata index` rebuilds it.
+- **The archive (files or bucket) is the source of truth.** The SQLite index is derived;
+  `fitdata index` rebuilds it.
   Never store anything only in the index.
 - **Adding a Garmin source:** add one entry to `endpoints.py` (fetcher plus description). Sync,
   manifests and the CLI pick it up automatically.
 - **Be gentle with Garmin:** keep throttling (`client.THROTTLE`) and the backoff on rate limits.
-- **Test** against a scratch `FITDATA_DATA_DIR` before touching a real archive.
+- **Test** against a scratch `FITDATA_DATA_DIR` (with `FITDATA_REMOTE=""` and `FITDATA_CONFIG`
+  pointing at a temporary file) before touching a real archive. `uv run python -m pytest` runs
+  everything that needs no extras; `uv run --extra bucket python -m pytest` adds the bucket
+  tests; `tests/fakegarmin.py` stands in for Garmin (made-up data, real FIT files).

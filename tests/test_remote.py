@@ -95,7 +95,7 @@ def test_forwarded_decode_is_refused(fake_ssh, run, archive):
     """The sender never forwards decode, so a forwarded one could only be used to read any file."""
     token = cli._encode_argv(["decode", str(archive / ".state" / "garmin-tokens.json")])
     code, out, err = run(cli.FORWARDED, token)
-    assert code == 2 and out == "" and "decode" in err and "Traceback" not in err and not fake_ssh
+    assert code == 5 and out == "" and "decode" in err and "Traceback" not in err and not fake_ssh  # refused
 
 
 def test_huge_days_is_a_plain_error(run):

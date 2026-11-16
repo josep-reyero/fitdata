@@ -6,27 +6,35 @@ Tables
     activities(id, date, type, name, start_local, duration_s, distance_m, ascent_m, avg_hr,
                aerobic_te, training_load, vo2max, ..., dir, fit)    one row per activity
     files(path, kind, date, activity_id, bytes)                     every stored file
+
+The archive is read through storage.archive() (plain files or a bucket); paths in the index are
+the archive keys, which are the same as the files' paths relative to data_dir.
 """
 from __future__ import annotations
 
 import json
 import logging
 import sqlite3
-from pathlib import Path
-
-from . import paths
+from . import paths, storage
 
 log = logging.getLogger("fitdata")
 
 
-def _rows(pattern: str) -> list[tuple[Path, dict]]:
-    out = []
-    for p in sorted(paths.DAYS.glob(pattern)):
-        try:
-            out.append((p, json.loads(p.read_text())))
-        except (OSError, json.JSONDecodeError):
+def _manifests(a: storage.Archive, entries: list[storage.Entry]) -> tuple[list, list]:
+    """(day key, day.json) and (activity key, activity.json) pairs, in path order."""
+    days, acts = [], []
+    for e in entries:
+        parts = e.key.split("/")  # garmin, days, YYYY, date, ...
+        if len(parts) == 5 and parts[4] == "day.json":
+            target = days
+        elif len(parts) == 7 and parts[4] == "activities" and parts[6] == "activity.json":
+            target = acts
+        else:
             continue
-    return out
+        m = a.read_json(e.key)
+        if isinstance(m, dict):
+            target.append((e.key.rsplit("/", 1)[0], m))
+    return days, acts
 
 
 def _table(db: sqlite3.Connection, name: str, rows: list[dict], pk: str, base: tuple[str, ...] = ()) -> None:
@@ -43,36 +51,44 @@ def _table(db: sqlite3.Connection, name: str, rows: list[dict], pk: str, base: t
 
 
 def rebuild() -> None:
+    paths.ROOT.mkdir(parents=True, exist_ok=True)  # a new machine: an empty index is still an index
     tmp = paths.DB.with_suffix(".sqlite.tmp")
     tmp.unlink(missing_ok=True)
     db = sqlite3.connect(tmp)
 
+    a = storage.archive()
+    entries = a.walk(paths.DAYS_KEY)
+    day_rows, act_rows = _manifests(a, entries)
+    keys = {e.key for e in entries}
+
     days = []
-    for p, m in _rows("*/*/day.json"):
+    for key, m in day_rows:
         days.append({"date": m.get("date"), "has_data": m.get("has_data"), "complete": m.get("complete"),
                      "fetched_at": m.get("fetched_at"), **(m.get("headline") or {}),
                      "activity_count": len(m.get("activities") or []),
-                     "dir": str(p.parent.relative_to(paths.ROOT))})
+                     "dir": key})
     _table(db, "days", days, "date", ("has_data",))
 
+    raw_fits: dict[str, list[str]] = {}
+    for k in keys:
+        folder, name = k.rsplit("/", 1)
+        if name.endswith(".fit") and folder.endswith("/raw"):
+            raw_fits.setdefault(folder[:-4], []).append(k)
     acts = []
-    for p, m in _rows("*/*/activities/*/activity.json"):
-        fit = next(iter(sorted((p.parent / "raw").glob("*.fit"))), None)
+    for key, m in act_rows:
+        fit = min(raw_fits.get(key, []), default=None)
         acts.append({k: v for k, v in m.items() if k not in ("sources", "derived", "layout_version")}
-                    | {"dir": str(p.parent.relative_to(paths.ROOT)),
-                       "fit": str(fit.relative_to(paths.ROOT)) if fit else None,
-                       "records": (m.get("derived") or {}).get("records")})
+                    | {"dir": key, "fit": fit, "records": (m.get("derived") or {}).get("records")})
     _table(db, "activities", acts, "id", ("date", "type", "name", "start_local", "dir", "fit"))
 
     files = []
-    for f in paths.DAYS.rglob("*"):
-        if not f.is_file() or f.name.endswith(".tmp"):
-            continue
-        rel = f.relative_to(paths.DAYS).parts  # YYYY, date, ...
+    for e in entries:
+        rel = e.key.split("/")[2:]  # YYYY, date, ...
+        if len(rel) < 3:
+            continue  # only files inside a day's folder
         kind = "/".join(x for x in rel[2:-1] if not x[:4].isdigit()) or "day"
         aid = rel[3].rsplit("-", 1)[-1] if len(rel) > 3 and rel[2] == "activities" else None
-        files.append({"path": str(f.relative_to(paths.ROOT)), "kind": kind, "date": rel[1],
-                      "activity_id": aid, "bytes": f.stat().st_size})
+        files.append({"path": e.key, "kind": kind, "date": rel[1], "activity_id": aid, "bytes": e.size})
     _table(db, "files", files, "path", ("kind", "date", "activity_id", "bytes"))
 
     db.execute("CREATE INDEX IF NOT EXISTS act_date ON activities(date)")

@@ -1,15 +1,19 @@
-"""Read-only access to the archive, shaped for people and for AI agents (`--json`)."""
+"""Read-only access to the archive, shaped for people and for AI agents (`--json`).
+
+The archive is opened read-only (storage.archive()), whether it is plain files or a bucket, and
+every key is checked (storage.check_key), so no query can reach the saved login in .state/."""
 from __future__ import annotations
 
 import csv
-import json
+import io
 import sqlite3
 import sys
 import time
 from datetime import date, timedelta
 from typing import Any
 
-from . import endpoints, paths
+from . import endpoints, paths, storage
+from .errors import NotFound
 from .validate import BadInput, check_activity_id, check_date, check_source
 
 # `fitdata sql`: rows returned unless --limit says otherwise, and how long one query may run.
@@ -32,7 +36,8 @@ ACTIVITY_EXTRA_SOURCES = ("list_entry",)
 
 def _db() -> sqlite3.Connection:
     if not paths.DB.exists():
-        raise SystemExit(f"No index at {paths.DB}. Run: fitdata index (or fitdata sync)")
+        raise NotFound(f"There is no index at {paths.DB} yet, so there is nothing to query.",
+                       hint="Run: fitdata index (or fitdata sync)")
     # as_uri() escapes characters such as "?" or "#" in the folder name, so they can't add URI options.
     db = sqlite3.connect(f"{paths.DB.resolve().as_uri()}?mode=ro", uri=True)
     db.row_factory = sqlite3.Row
@@ -103,24 +108,25 @@ def day(ds: str, source: str | None = None) -> Any:
     ds = check_date(ds)
     if source is not None:
         source = check_source(source, day_sources(), "day")
-    ddir = paths.day_dir(ds)
-    manifest = _read(ddir / "day.json")
+    a = storage.archive()
+    dkey = paths.day_key(ds)
+    manifest = _read(f"{dkey}/day.json")
     if manifest is None:
-        raise SystemExit(f"Nothing stored for {ds}")
+        raise NotFound(f"Nothing stored for {ds}", hint="`fitdata status` shows which days the archive has.")
     if source:
-        data = _read(ddir / "processed" / f"{source}.json")
+        data = _read(f"{dkey}/processed/{source}.json")
         if data is None:
-            raise SystemExit(f"No '{source}' for {ds}. Available: {', '.join(available_day_sources(ds))}")
+            raise NotFound(f"No '{source}' for {ds}. Available: {', '.join(available_day_sources(ds))}")
         return data
     return {"date": ds, "headline": manifest.get("headline"), "complete": manifest.get("complete"),
             "fetched_at": manifest.get("fetched_at"), "activities": manifest.get("activities"),
             "sources_with_data": available_day_sources(ds),
-            "raw_files": sorted(p.name for p in (ddir / "raw" / "wellness").glob("*.fit")),
-            "dir": str(ddir)}
+            "raw_files": [f for f in a.children(f"{dkey}/raw/wellness")[1] if f.endswith(".fit")],
+            "dir": a.location(dkey)}
 
 
 def available_day_sources(ds: str) -> list[str]:
-    m = _read(paths.day_dir(ds) / "day.json") or {}
+    m = _read(f"{paths.day_key(ds)}/day.json") or {}
     return [k for k, v in (m.get("sources") or {}).items() if v.get("status") == "ok"]
 
 
@@ -129,29 +135,30 @@ def activity(activity_id: str, source: str | None = None, records: bool = False,
     activity_id = check_activity_id(activity_id)
     if source is not None:
         source = check_source(source, activity_sources(), "activity")
-    adir = paths.find_activity_dir(activity_id)
-    if adir is None:
-        raise SystemExit(f"No activity {activity_id}")
+    a = storage.archive()
+    akey = storage.find_activity(a, activity_id)
+    if akey is None:
+        raise NotFound(f"No activity {activity_id}", hint="Run `fitdata activities` to see the ids you have.")
     if records:
-        path = adir / "derived" / "records.csv"
-        if not path.exists() or paths.is_secret(path):
-            raise SystemExit("No decoded records for this activity")
+        data = a.read(f"{akey}/derived/records.csv")
+        if data is None:
+            raise NotFound("No decoded records for this activity")
         keep = [c.strip() for c in columns.split(",")] if columns else None
-        with open(path, newline="") as fh:
-            rows = [r for i, r in enumerate(csv.DictReader(fh)) if i % max(every, 1) == 0]
+        reader = csv.DictReader(io.StringIO(data.decode("utf-8", errors="replace"), newline=""))
+        rows = [r for i, r in enumerate(reader) if i % max(every, 1) == 0]
         if keep:
             rows = [{k: r.get(k) for k in keep} for r in rows]
         return rows
     if source:
-        data = _read(adir / "processed" / f"{source}.json")
+        data = _read(f"{akey}/processed/{source}.json")
         if data is None:
-            raise SystemExit(f"No '{source}' for activity {activity_id}")
+            raise NotFound(f"No '{source}' for activity {activity_id}")
         return data
-    m = _read(adir / "activity.json") or {}
+    m = _read(f"{akey}/activity.json") or {}
     m = {k: v for k, v in m.items() if k not in ("sources",)}
-    m["sources_with_data"] = sorted(p.stem for p in (adir / "processed").glob("*.json"))
-    m["files"] = sorted(str(p.relative_to(adir)) for p in adir.rglob("*") if p.is_file())
-    m["dir"] = str(adir)
+    m["sources_with_data"] = sorted(f[:-5] for f in a.children(f"{akey}/processed")[1] if f.endswith(".json"))
+    m["files"] = sorted(e.key[len(akey) + 1:] for e in a.walk(akey))
+    m["dir"] = a.location(akey)
     return m
 
 
@@ -262,10 +269,6 @@ def sources() -> dict[str, Any]:
             "account": list(endpoints.ACCOUNT)}
 
 
-def _read(path) -> Any:
-    if paths.is_secret(path):  # never hand out the saved login, even through a symlink
-        return None
-    try:
-        return json.loads(path.read_text())
-    except (FileNotFoundError, json.JSONDecodeError):
-        return None
+def _read(key: str) -> Any:
+    # The archive checks the key and never hands out the saved login, even through a symlink.
+    return storage.archive().read_json(key)

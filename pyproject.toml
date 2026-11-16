@@ -10,6 +10,13 @@ dependencies = [
     "garmin-fit-sdk>=21.0",
 ]
 
+[project.optional-dependencies]
+# storage = "bucket": keep the archive in a my-bucket-storage bucket (see README, "Storage").
+# Not on PyPI, so it is pinned to a commit of its public repository.
+bucket = [
+    "my-bucket-storage @ git+https://github.com/josep-reyero/my-bucket-storage@9f39c3d939bf9631b9ab909a205d1aaffea20554",
+]
+
 [dependency-groups]
 dev = ["pytest>=8"]
 
@@ -22,6 +29,9 @@ fitdata = "fitdata.cli:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true  # the bucket extra above
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fitdata"]
