@@ -84,7 +84,7 @@ def test_sync_query_and_index_through_the_backend(backend, cli_run):
     assert "derived/laps.csv" in info["files"] and "summary" in info["sources_with_data"]
     code, out, _ = cli_run("--json", "sql", "SELECT fit, records FROM activities")
     assert json.loads(out) == [{"fit": f"{akey}/raw/{AID}_ACTIVITY.fit", "records": 5}]
-    code, out, _ = cli_run("--json", "sql", "SELECT count(*) AS n FROM files WHERE kind = 'raw/wellness'")
+    code, out, _ = cli_run("--json", "sql", "SELECT count(*) AS n FROM garmin_files WHERE kind = 'raw/wellness'")
     assert json.loads(out) == [{"n": 2}]
     code, out, _ = cli_run("--json", "status")
     st = json.loads(out)
@@ -187,7 +187,7 @@ def test_migrate_round_trip(tmp_path, monkeypatch, cli_run):
     _save_token()
     _sync(2)
     before = _hashes(root / "garmin")
-    rows_before = query.sql("SELECT * FROM files ORDER BY path")
+    rows_before = query.sql("SELECT * FROM garmin_files ORDER BY path")
 
     code, out, err = cli_run("--json", "migrate-storage", "--to", "bucket")
     result = json.loads(out)
@@ -197,7 +197,7 @@ def test_migrate_round_trip(tmp_path, monkeypatch, cli_run):
     assert cfg_text.startswith("# my settings\n") and 'storage = "bucket"\n[remote]' in cfg_text
     assert config.load().storage == "bucket"
     assert _hashes(root / "garmin") == before  # the source is untouched
-    assert query.sql("SELECT * FROM files ORDER BY path") == rows_before  # same index from the bucket
+    assert query.sql("SELECT * FROM garmin_files ORDER BY path") == rows_before  # same index from the bucket
     code, out, _ = cli_run("--json", "day", TODAY)
     assert json.loads(out)["dir"].startswith("bucket:archive/")
 

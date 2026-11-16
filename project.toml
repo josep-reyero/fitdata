@@ -1,52 +1,93 @@
-# fitdata as a my-easy-software (mes) project: its app, its jobs and what its dashboards may show.
-# The dashboards are in ui/dashboards/ (see ui/README.md). Without mes, the same three jobs run as
-# systemd user timers from systemd/ (see README, "Collect").
+# fitdata as a my-easy-software (mes) project: its apps, the tables they share and its dashboards.
+# Each app is a Python package with its own app.toml (its commands, jobs and data); the first one,
+# fitdata-garmin, lives in apps/fitdata_garmin/. Without mes, the same three jobs run as systemd user
+# timers from systemd/ (see README, "Collect").
 
 [project]
 name = "fitdata"
 title = "Fitness"
 version = "0.1.0"
+apps = ["fitdata_garmin"]          # package names; the order decides menus and where sections land
 
-# The project's first app: the Garmin archive. More apps (other data sources) can sit beside it.
-[apps.fitdata-garmin]
-cli = "fitdata-garmin"     # the console script (`fitdata` is a short name for it); `fitdata-garmin --json describe` lists its commands and kinds
+# The shared tables: every app that keeps days or activities writes rows into these, with the same
+# columns. Readers (dashboards, `fitdata sql`, agents) read the views "days" and "activities". After
+# changing a table here, regenerate apps/fitdata_garmin/schema.sql (README, "Working on the code").
 
-# The jobs match systemd/*.timer. "--local" keeps a job on this machine even if the config names a
-# remote. Every job only talks to Garmin Connect (sign-in refresh and data). `fitdata login`, which is
-# not a job (a person runs it), also reaches mobile.integration.garmin.com during the sign-in itself.
-[jobs.activities]
-run = "fitdata-garmin activities-sync --days 2 --local"
-schedule = "*:0/10"                      # every 10 minutes: new activities
-network = ["connectapi.garmin.com", "connect.garmin.com", "diauth.garmin.com", "sso.garmin.com"]
-memory = "512M"
-timeout = "20m"
+[tables.days]                      # one row per archived day
+key = ["date"]
+# Rows of several apps for the same day become one row, each value from the first app in this list
+# that has one, then the others in apps order.
+prefer = ["fitdata-garmin"]
+[tables.days.columns]
+date = "text"
+has_data = "boolean"
+complete = "boolean"
+fetched_at = "text"
+steps = "integer"
+distance_m = "real"
+calories = "real"
+active_calories = "real"
+floors_up = "real"
+resting_hr = "integer"
+min_hr = "integer"
+max_hr = "integer"
+stress_avg = "integer"
+body_battery_high = "integer"
+body_battery_low = "integer"
+intensity_minutes = "integer"
+sleep_seconds = "integer"
+sleep_score = "integer"
+hrv_last_night_avg = "integer"
+hrv_status = "text"
+training_readiness = "integer"
+vo2max_running = "real"
+training_status = "json"
+activity_count = "integer"
+dir = "text"
 
-[jobs.daily]
-run = "fitdata-garmin sync --days 3 --local"
-schedule = "*-*-* 07,13,22:30:00"        # 07:30, 13:30 and 22:30: the last 3 days' health data
-network = ["connectapi.garmin.com", "connect.garmin.com", "diauth.garmin.com", "sso.garmin.com"]
-memory = "512M"
-timeout = "30m"
-
-[jobs.backfill]
-run = "fitdata-garmin backfill --max-days 90 --local"
-schedule = "*-*-* 02:15:00"              # nightly: 90 more days of history until it is complete
-network = ["connectapi.garmin.com", "connect.garmin.com", "diauth.garmin.com", "sso.garmin.com"]
-memory = "512M"
-timeout = "3h"                           # about 35 throttled calls per day of history
+[tables.activities]                # one row per activity; every app's activities are kept
+key = ["id"]
+[tables.activities.columns]
+id = "integer"
+date = "text"
+type = "text"
+name = "text"
+start_local = "text"
+dir = "text"
+fit = "text"
+parent_type = "integer"
+event_type = "text"
+start_utc = "text"
+duration_s = "real"
+moving_s = "real"
+elapsed_s = "real"
+distance_m = "real"
+ascent_m = "real"
+descent_m = "real"
+avg_hr = "real"
+max_hr = "real"
+avg_speed_mps = "real"
+calories = "real"
+aerobic_te = "real"
+anaerobic_te = "real"
+te_label = "text"
+training_load = "real"
+vo2max = "real"
+avg_power = "real"
+avg_cadence = "real"
+device = "integer"
+location = "text"
+fetched_at = "text"
+complete = "boolean"
+records = "integer"
 
 [ui]
-# The index fitdata builds (`fitdata index`, and every job), relative to the project's data folder.
-# That folder is fitdata's own data_dir; mes and easy-ui find it through
-# [projects.fitdata] data_dir in ~/.config/mes/config.toml (see ui/README.md).
-data = "fitdata.sqlite"
-# Only these tables reach the dashboards. The files table (paths of stored files) stays out.
-tables = ["days", "activities"]
 accent = "#2a7f62"
-# The menu order; the first one (Today) opens when the page starts.
+# The menu order; the first one (Today) opens when the page starts. "overview" is the project's own
+# (ui/dashboards/), the others come from fitdata-garmin (apps/fitdata_garmin/dashboards/).
 dashboards = ["overview", "sleep", "activities", "trends"]
 # Every job rebuilds the index, so the dashboard data is rebuilt after each of them.
-refresh_after = ["activities", "daily", "backfill"]
+refresh_after = ["fitdata-garmin.activities", "fitdata-garmin.daily", "fitdata-garmin.backfill"]
 
 # Optional, only with storage = "bucket" in fitdata's config: the archive's raw and processed files
 # then live in a my-bucket-storage bucket (see README, "Storage"). fitdata reads its store location

@@ -10,3 +10,5 @@ build/
 .state/
 garmin-tokens.json
 config.toml
+# Written by `mes apps sync` on each computer (it holds local paths).
+apps.lock.json

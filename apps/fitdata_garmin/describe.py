@@ -4,10 +4,14 @@ The JSON has the shape my-easy-software apps produce (`mes.App.describe()`), so 
 `mes gate` can ask fitdata which commands it has and what each may do, without fitdata depending
 on mes:
 
-    {"app": "fitdata-garmin", "title", "version", "mes_version": null, "allowed", "json", "exit_codes",
+    {"app": "fitdata-garmin", "short": "garmin", "project": "fitdata", "title", "version",
+     "mes_version": null, "allowed", "json", "exit_codes",
      "commands": [{"name", "kind", "help", "builtin", "args": [{"name", "flag", "kind", "type",
                    "required", "default", "many", "choices", "help"}]}],
-     "jobs": [...from project.toml...]}
+     "jobs": [{"id": "fitdata-garmin.<job>", "app", "name", "run", "trigger", ...}]}
+
+The jobs are this app's own, from app.toml next to this file, with the project's [settings] for
+it applied when fitdata runs from its repository.
 
 Kinds, in increasing order of power: read (only looks), write (changes data), admin (changes
 how fitdata is set up, here: the Garmin login). MES_ALLOW names the highest kind this session may
@@ -40,8 +44,13 @@ BUILTIN = {"describe", "guide", "schema", "sources"}  # the commands every mes a
 _KIND_WORDS = {"read": "only reads", "write": "changes data", "admin": "changes how fitdata is set up"}
 _HOW = 'Set MES_ALLOW to "read", "write" or "admin", or remove it.'
 
-REPO = Path(__file__).resolve().parents[2]
+APP_DIR = Path(__file__).resolve().parent
+APP_TOML = APP_DIR / "app.toml"
+REPO = APP_DIR.parents[1]  # the project folder, when fitdata runs from its repository (apps/fitdata_garmin)
 PROJECT_TOML = REPO / "project.toml"
+APP_NAME = "fitdata-garmin"
+SHORT_NAME = "garmin"
+PROJECT = "fitdata"
 
 
 def allowed_level() -> str:
@@ -107,26 +116,53 @@ def commands(parser: argparse.ArgumentParser) -> list[dict[str, Any]]:
     return out
 
 
-def jobs() -> list[dict[str, Any]]:
-    """The jobs of project.toml (only present when fitdata runs from its repository)."""
+def _toml(path: Path) -> dict:
     try:
-        data = tomllib.loads(PROJECT_TOML.read_text())
-    except (OSError, tomllib.TOMLDecodeError):
-        return []
+        return tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return {}
+
+
+def _settings() -> dict[str, dict]:
+    """[settings.fitdata-garmin] jobs of the project, if this app runs from its repository."""
+    project = _toml(PROJECT_TOML)
+    if "fitdata_garmin" not in ((project.get("project") or {}).get("apps") or []):
+        return {}
+    jobs = ((project.get("settings") or {}).get(APP_NAME) or {}).get("jobs")
+    return jobs if isinstance(jobs, dict) else {}
+
+
+def jobs() -> list[dict[str, Any]]:
+    """The jobs of app.toml, each with its id, after the project's [settings] for this app."""
+    data = _toml(APP_TOML).get("jobs") or {}
+    settings = _settings()
     out = []
-    for name, j in (data.get("jobs") or {}).items():
-        trigger = next((t for t in ("schedule", "after", "manual") if t in j), None)
-        out.append({"name": name, "run": j.get("run"), "trigger": trigger, "schedule": j.get("schedule"),
-                    "after": j.get("after"), "memory": j.get("memory"), "timeout": j.get("timeout"),
-                    "network": j.get("network") or False})
+    for name, j in data.items() if isinstance(data, dict) else ():
+        if not isinstance(j, dict):
+            continue
+        s = settings.get(name) if isinstance(settings.get(name), dict) else {}
+        if s.get("enabled") is False:
+            continue  # switched off by the project: it has no units and is not listed
+        trigger = next((t for t in ("schedule", "after", "manual", "webhook") if t in j), None)
+        schedule = j.get("schedule")
+        if isinstance(s.get("schedule"), str):
+            trigger, schedule = "schedule", s["schedule"]
+        network = j.get("network") or False
+        if isinstance(s.get("add_network"), list) and isinstance(network, list):
+            network = [*network, *[h for h in s["add_network"] if isinstance(h, str) and h not in network]]
+        out.append({"id": f"{APP_NAME}.{name}", "app": APP_NAME, "name": name, "run": j.get("run"),
+                    "trigger": trigger, "schedule": schedule if trigger == "schedule" else None,
+                    "after": j.get("after"), "memory": s.get("memory") or j.get("memory"),
+                    "timeout": s.get("timeout") or j.get("timeout"), "network": network})
     return out
 
 
 def describe(parser: argparse.ArgumentParser) -> dict[str, Any]:
     return {
-        "app": "fitdata-garmin",
-        "project": "fitdata",
-        "title": "Fitness",
+        "app": APP_NAME,
+        "short": SHORT_NAME,
+        "project": PROJECT,
+        "title": _toml(APP_TOML).get("app", {}).get("title") or APP_NAME,
         "version": __version__,
         "mes_version": None,  # fitdata does not use the mes library; it answers in the same shape
         "allowed": allowed_level(),
@@ -149,8 +185,9 @@ def describe_text(parser: argparse.ArgumentParser) -> str:
            "admin": "read, write and admin commands (admin: the Garmin login)"}[level]
     rows = [(c["name"], c["kind"], (c["help"] or "").splitlines()[0]) for c in commands(parser)]
     w0 = max(len(r[0]) for r in rows)
-    lines = [f"Fitness (fitdata), version {__version__}", f"This session may run {may}.", ""]
+    lines = [f"Garmin archive (fitdata-garmin, an app of the fitdata project), version {__version__}",
+             f"This session may run {may}.", ""]
     lines += [f"{n.ljust(w0)}  {k.ljust(5)}  {h}" for n, k, h in rows]
-    lines += ["", "For the arguments of a command, run: fitdata <command> --help "
-              "(or fitdata --json describe for everything as data)."]
+    lines += ["", "For the arguments of a command, run: fitdata-garmin <command> --help "
+              "(or fitdata-garmin --json describe for everything as data)."]
     return "\n".join(lines)

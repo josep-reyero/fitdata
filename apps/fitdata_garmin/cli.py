@@ -1,29 +1,33 @@
-"""fitdata: a personal Garmin archive, organised per day, with a CLI for people and AI agents.
+"""fitdata-garmin: a personal Garmin archive, organised per day, with a CLI for people and AI agents.
+
+It is the first app of the fitdata project. The project command `fitdata` hands commands to it:
+`fitdata garmin <command>` (the full form) or, while it is the project's only app, `fitdata <command>`.
 
 Reading (add --json for machine-readable output):
-  fitdata summary [--days 7]                    recent days' key numbers + activities
-  fitdata days [--from D] [--to D] [--days N] [--fields a,b]
-  fitdata activities [--from D] [--to D] [--type trail] [--limit N]
-  fitdata day YYYY-MM-DD [--source sleep]       a day's overview, or one source's full data
-  fitdata activity ID [--source splits] [--records [--every 5] [--columns a,b]]
-  fitdata sources                               what each source contains
-  fitdata schema                                index tables and columns
-  fitdata sql "SELECT ..." [--limit 1000]       read-only SQL on the index
-  fitdata status                                archive size, last sync, login
-  fitdata describe                              every command, its kind and arguments
+  fitdata-garmin summary [--days 7]               recent days' key numbers + activities
+  fitdata-garmin days [--from D] [--to D] [--days N] [--fields a,b]
+  fitdata-garmin activities [--from D] [--to D] [--type trail] [--limit N]
+  fitdata-garmin day YYYY-MM-DD [--source sleep]  a day's overview, or one source's full data
+  fitdata-garmin activity ID [--source splits] [--records [--every 5] [--columns a,b]]
+  fitdata-garmin sources                          what each source contains
+  fitdata-garmin schema                           index tables and columns
+  fitdata-garmin sql "SELECT ..." [--limit 1000]  read-only SQL on the index
+  fitdata-garmin status                           archive size, last sync, login
+  fitdata-garmin describe                         every command, its kind and arguments
 
 Collecting (on the machine that holds the archive):
-  fitdata login                                 sign in to Garmin (asks in the terminal)
-  fitdata sync [--days 3]                       refresh recent days and activities
-  fitdata activities-sync [--days 2]            just check for new activities (cheap)
-  fitdata backfill [--max-days 60]              fill in history, newest first
-  fitdata account | index
-  fitdata migrate-storage --to bucket|files     move the archive between files and a bucket
-  fitdata decode FILE.fit [--csv]               decode any FIT file
+  fitdata-garmin login                            sign in to Garmin (asks in the terminal)
+  fitdata-garmin sync [--days 3]                  refresh recent days and activities
+  fitdata-garmin activities-sync [--days 2]       just check for new activities (cheap)
+  fitdata-garmin backfill [--max-days 60]         fill in history, newest first
+  fitdata-garmin account | index
+  fitdata-garmin migrate-storage --to bucket|files
+                                                  move the archive between files and a bucket
+  fitdata-garmin decode FILE.fit [--csv]          decode any FIT file
 
 With [remote] host set in the config, every command except `decode`, `describe` and `guide` runs
 on that machine over SSH (use --local to force this machine). Config: ~/.config/fitdata/config.toml
-(see README). MES_ALLOW=read|write|admin limits which commands may run (see `fitdata describe`).
+(see README). MES_ALLOW=read|write|admin limits which commands may run (see `fitdata-garmin describe`).
 
 Exit codes: 0 ok, 1 error, 2 usage, 3 not found, 4 not allowed, 5 refused, 6 needs a person
 (for example `fitdata login`), 75 temporary (Garmin's rate limit, another sync running).
@@ -60,7 +64,7 @@ class _Parser(argparse.ArgumentParser):
 
 
 def _parser() -> argparse.ArgumentParser:
-    p = _Parser(prog="fitdata", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = _Parser(prog="fitdata-garmin", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.add_argument("--local", action="store_true", help="use this machine's archive even if a remote is configured")
     p.add_argument("-v", "--verbose", action="store_true", help="more detail in the log")
@@ -255,11 +259,11 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _guide() -> str:
-    agents = desc.REPO / "AGENTS.md"
+    agents = desc.APP_DIR / "AGENTS.md"  # this app's own guide, next to app.toml
     if agents.is_file():
-        return agents.read_text()
-    return ("# Using fitdata\n\nAlways call `fitdata --json <command>`. Run `fitdata --json describe` for every "
-            "command, its kind and its arguments.\n")
+        return agents.read_text(encoding="utf-8")
+    return ("# Using fitdata-garmin\n\nAlways call `fitdata-garmin --json <command>`. Run `fitdata-garmin --json "
+            "describe` for every command, its kind and its arguments.\n")
 
 
 def _main(argv: list[str], forwarded: bool = False) -> int:
@@ -285,7 +289,7 @@ def _main(argv: list[str], forwarded: bool = False) -> int:
     if args.cmd == "guide":
         text = _guide()
         if args.json:
-            _print({"app": "fitdata-garmin", "source": "AGENTS.md", "guide": text}, True)
+            _print({"app": desc.APP_NAME, "source": "AGENTS.md", "guide": text}, True)
         else:
             print(text)
         return 0

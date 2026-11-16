@@ -318,17 +318,17 @@ def test_a_list_that_is_not_a_list_is_logged(tmp_path, monkeypatch, caplog):
 # ------------------------------------------------------------------ B8: index column names
 
 def test_odd_manifest_keys_do_not_reach_the_index_sql(archive, caplog):
+    """The columns are fixed by project.toml: keys of a manifest (data from Garmin) never become
+    columns or SQL, and a key spelled like a column in other letters changes nothing."""
     ddir = paths.day_dir(DAY)
     m = json.loads((ddir / "day.json").read_text())
-    m["headline"].update({'x" TEXT); DROP TABLE files; --': 1, "Steps": 2, "a" * 65: 3, "ok_field": 4})
+    m["headline"].update({'x" TEXT); DROP TABLE garmin_files; --': 1, "Steps": 2, "a" * 65: 3, "ok_field": 4})
     (ddir / "day.json").write_text(json.dumps(m))
-    caplog.set_level(logging.WARNING, "fitdata")
     index.rebuild()
     cols = query.schema()["tables"]
-    assert "files" in cols and "ok_field" in cols["days"] and "steps" in cols["days"]
-    assert not any('"' in c or c == "Steps" or len(c) > 64 for c in cols["days"])
-    assert "left 3 field name(s) out of the days table" in caplog.text
-    assert query.sql("SELECT steps, ok_field FROM days") == [{"steps": 1234, "ok_field": 4}]
+    expected = [c[0] for c in index.expected_columns()["days"]]
+    assert "garmin_files" in cols and cols["days"] == expected
+    assert query.sql("SELECT steps FROM days") == [{"steps": 1234}]
 
 
 # ------------------------------------------------------------------ B10: odds and ends
@@ -439,7 +439,7 @@ def test_lock_helper_reports_busy_as_temporary(tmp_path):
 
 def test_project_toml_lists_only_hosts_the_jobs_reach():
     import tomllib
-    data = tomllib.loads((cli.desc.PROJECT_TOML).read_text())
+    data = tomllib.loads((cli.desc.APP_TOML).read_text())
     for job in data["jobs"].values():
         # mobile.integration.garmin.com is only reached by a password sign-in (`fitdata login`).
         assert "mobile.integration.garmin.com" not in job["network"]

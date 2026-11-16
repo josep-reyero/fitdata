@@ -6,13 +6,14 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 import sqlite3
 import sys
 import time
 from datetime import date, timedelta
 from typing import Any
 
-from . import endpoints, paths, storage
+from . import endpoints, index, paths, storage
 from .errors import NotFound
 from .safefs import hold_lock
 from .validate import BadInput, check_activity_id, check_date, check_source
@@ -35,19 +36,36 @@ SQL_MAX_RESULT_BYTES = 64 * 1024 * 1024
 ACTIVITY_EXTRA_SOURCES = ("list_entry",)
 
 
+NO_INDEX = "There is no index in the data folder yet, so there is nothing to query."
+NO_INDEX_HINT = "Run: fitdata index (or fitdata sync)"
+
+
 def _db() -> sqlite3.Connection:
     if not paths.DB.exists():
-        raise NotFound("There is no index in the data folder yet, so there is nothing to query.",
-                       hint="Run: fitdata index (or fitdata sync)")
+        raise NotFound(NO_INDEX, hint=NO_INDEX_HINT)
     # as_uri() escapes characters such as "?" or "#" in the folder name, so they can't add URI options.
     db = sqlite3.connect(f"{paths.DB.resolve().as_uri()}?mode=ro", uri=True)
     db.row_factory = sqlite3.Row
     return db
 
 
+def readable() -> dict[str, str]:
+    """What fitdata's queries may read, by name: the shared views (from schema.sql, in its order)
+    and fitdata-garmin's own table. Never the views' __rows tables directly."""
+    views = re.findall(r'^CREATE VIEW "([a-z][a-z0-9_]*)" AS$', index.SCHEMA_SQL.read_text(encoding="utf-8"), re.M)
+    return {**{v: "view" for v in views}, index.FILES_TABLE: "table"}
+
+
 def _rows(sql: str, params: tuple = ()) -> list[dict[str, Any]]:
     with _db() as db:
-        return [dict(r) for r in db.execute(sql, params)]
+        try:
+            return [dict(r) for r in db.execute(sql, params)]
+        except sqlite3.OperationalError as e:
+            if "no such table" in str(e):
+                # The file exists but holds no index of fitdata-garmin yet (made by another app, say).
+                raise NotFound(NO_INDEX, hint=NO_INDEX_HINT) from None
+            raise
+
 
 
 MAX_DAYS = 100 * 366  # longer than any real archive; bigger numbers are a typo
@@ -73,7 +91,7 @@ def days(frm: str | None = None, to: str | None = None, last: int | None = None,
         keep = ["date", *[f.strip() for f in fields.split(",") if f.strip()]]
         rows = [{k: r.get(k) for k in keep} for r in rows]
     else:
-        rows = [{k: v for k, v in r.items() if k not in ("dir", "fetched_at", "complete")} for r in rows]
+        rows = [{k: v for k, v in r.items() if k not in ("source", "dir", "fetched_at", "complete")} for r in rows]
     return rows
 
 
@@ -88,7 +106,8 @@ def activities(frm: str | None = None, to: str | None = None, last: int | None =
     sql += " ORDER BY start_local DESC"
     if limit:
         sql += f" LIMIT {int(limit)}"
-    return _rows(sql, tuple(params))
+    # The view has a "source" column (the app a row came from); the output stays as it always was.
+    return [{k: v for k, v in r.items() if k != "source"} for r in _rows(sql, tuple(params))]
 
 
 def summary(last: int = 7) -> dict[str, Any]:
@@ -163,23 +182,70 @@ def activity(activity_id: str, source: str | None = None, records: bool = False,
     return m
 
 
-# Everything `fitdata sql` may do: read columns of the index's own tables and call ordinary
-# SQL functions. Anything else (ATTACH, PRAGMA, writes, VACUUM INTO, loading extensions,
-# transactions) is refused by SQLite itself before the query runs.
+# Everything `fitdata sql` may do: read the shared views and fitdata-garmin's own table, and call
+# ordinary SQL functions. Anything else (ATTACH, PRAGMA, writes, VACUUM INTO, loading extensions,
+# transactions, reading another app's tables or sqlite_master) is refused by SQLite itself before
+# the query runs.
 _SQL_DENIED_FUNCTIONS = {"load_extension", "readfile", "writefile", "edit", "fts3_tokenizer"}
+# SQLite's information tables that are not named sqlite_* or pragma_*.
+_SQL_DENIED_TABLES = {"dbstat"}
 
 
-def _sql_authorizer(action: int, arg1: str | None, arg2: str | None, dbname: str | None,
-                    _trigger: str | None) -> int:
-    if action in (sqlite3.SQLITE_SELECT, sqlite3.SQLITE_RECURSIVE):
-        return sqlite3.SQLITE_OK
-    if action == sqlite3.SQLITE_READ:
-        # SQLite names no database for count(*) and for reads of a WITH table. ATTACH is refused
-        # and the attach limit is 0, so the index ("main") is the only database open anyway.
-        return sqlite3.SQLITE_OK if dbname in ("main", None) else sqlite3.SQLITE_DENY
-    if action == sqlite3.SQLITE_FUNCTION:
-        return sqlite3.SQLITE_DENY if (arg2 or "").lower() in _SQL_DENIED_FUNCTIONS else sqlite3.SQLITE_OK
-    return sqlite3.SQLITE_DENY
+def _names_rows_table(query: str) -> bool:
+    """True when the query itself names a shared table's rows (days__rows...), in any spelling.
+
+    SQLite resolves the names: the query is prepared (EXPLAIN, never run) on an empty in-memory
+    database where the views exist but read from tables of other names. Any name SQLite cannot
+    find there that ends in __rows was written in the query, not reached through a view."""
+    text = index.SCHEMA_SQL.read_text(encoding="utf-8").replace('__rows"', '__sealed"')
+    mem = sqlite3.connect(":memory:")
+    try:
+        mem.executescript(text)
+        mem.execute("PRAGMA query_only = ON")
+        mem.setlimit(sqlite3.SQLITE_LIMIT_ATTACHED, 0)
+        mem.set_authorizer(lambda action, *_: sqlite3.SQLITE_OK if action in _SCRATCH_ACTIONS else sqlite3.SQLITE_DENY)
+        try:
+            mem.execute("EXPLAIN " + query).fetchmany(1)
+        except (sqlite3.Error, sqlite3.Warning) as e:
+            return "__rows" in str(e).lower()
+        return False
+    finally:
+        mem.close()
+
+
+_SCRATCH_ACTIONS = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_RECURSIVE}
+
+
+def _sql_authorizer_for(names: dict[str, str], stored: set[str]):
+    """`names`: what may be read (readable()); `stored`: every table and view in the file."""
+    views = {n for n, kind in names.items() if kind == "view"}
+
+    def authorizer(action: int, arg1: str | None, arg2: str | None, dbname: str | None,
+                   view: str | None) -> int:
+        if action in (sqlite3.SQLITE_SELECT, sqlite3.SQLITE_RECURSIVE):
+            return sqlite3.SQLITE_OK
+        if action == sqlite3.SQLITE_READ:
+            # ATTACH is refused and the attach limit is 0, so the index ("main") is the only database
+            # open anyway; SQLite names no database for count(*) and for reads of a WITH table.
+            if dbname not in ("main", None):
+                return sqlite3.SQLITE_DENY
+            table = (arg1 or "").lower()
+            if table in names:
+                return sqlite3.SQLITE_OK
+            # A shared view reads its own rows table (days reads days__rows). SQLite also gives a
+            # WITH table's name here, so a query that names a rows table itself is refused before
+            # it runs (_names_rows_table); this check is the second line.
+            if table.endswith("__rows") and view in views and view == table[: -len("__rows")]:
+                return sqlite3.SQLITE_OK
+            # Anything else stored in the file (another app's table, a rows table read directly,
+            # SQLite's own tables) and SQLite's built-in information tables are refused.
+            if table in stored or table.startswith(("sqlite_", "pragma_")) or table in _SQL_DENIED_TABLES:
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK  # a WITH table of the query itself, or json_each / json_tree
+        if action == sqlite3.SQLITE_FUNCTION:
+            return sqlite3.SQLITE_DENY if (arg2 or "").lower() in _SQL_DENIED_FUNCTIONS else sqlite3.SQLITE_OK
+        return sqlite3.SQLITE_DENY
+    return authorizer
 
 
 def sql(query: str, limit: int | None = SQL_DEFAULT_LIMIT, timeout_s: float = SQL_TIMEOUT_S) -> list[dict[str, Any]]:
@@ -209,10 +275,14 @@ def _sql(db: sqlite3.Connection, query: str, limit: int | None, timeout_s: float
     db.execute("PRAGMA temp_store = MEMORY")
     db.setlimit(sqlite3.SQLITE_LIMIT_ATTACHED, 0)
     db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, SQL_MAX_VALUE_BYTES)
-    db.set_authorizer(_sql_authorizer)
+    names = readable()
+    stored = {str(n).lower() for (n,) in db.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")}
+    db.set_authorizer(_sql_authorizer_for(names, stored))
     deadline = time.monotonic() + timeout_s
     db.set_progress_handler(lambda: int(time.monotonic() > deadline), SQL_PROGRESS_STEPS)
     try:
+        if _names_rows_table(query):
+            raise sqlite3.DatabaseError("not authorized")
         cur = db.execute(query)
         rows = _fetch(cur, limit)
     except sqlite3.ProgrammingError as e:
@@ -222,11 +292,16 @@ def _sql(db: sqlite3.Connection, query: str, limit: int | None, timeout_s: float
         raise BadInput(f"SQLite could not run that query ({e}). Check it and try again.") from None
     except sqlite3.DatabaseError as e:
         msg = str(e)
-        if "not authorized" in msg or "authorization denied" in msg or "readonly" in msg or "read-only" in msg:
-            raise BadInput("fitdata sql can only read the index tables (days, activities, files). "
-                           "That query tries to change something, attach another file, change a "
+        if any(w in msg for w in ("not authorized", "authorization denied", "prohibited", "readonly", "read-only",
+                                  "cannot modify")):
+            raise BadInput(f"fitdata sql can only read the index ({', '.join(names)}). That query tries "
+                           "to read something else, change something, attach another file, change a "
                            "setting (PRAGMA) or load code, so it was refused. Use a single SELECT; "
                            "`fitdata schema` lists the tables and columns.") from None
+        if "no such table" in msg:
+            db.set_authorizer(None)  # the sandbox is done with; this only looks at the file's own list
+            if not _has_index(db):
+                raise NotFound(NO_INDEX, hint=NO_INDEX_HINT) from None
         if "interrupted" in msg:
             raise BadInput(f"That query was still running after {timeout_s:g} seconds, so fitdata "
                            "stopped it. Narrow it down, for example with a WHERE on date.") from None
@@ -266,15 +341,29 @@ def _fetch(cur: sqlite3.Cursor, limit: int | None) -> list[sqlite3.Row]:
     return rows
 
 
+def _has_index(db: sqlite3.Connection) -> bool:
+    return db.execute(f"SELECT count(*) FROM sqlite_master WHERE name IN ({', '.join('?' * len(SHARED_VIEWS))})",
+                      SHARED_VIEWS).fetchone()[0] == len(SHARED_VIEWS)
+
+
+SHARED_VIEWS = index.SHARED
+
+
 def schema() -> dict[str, Any]:
     with _db() as db:
+        if not _has_index(db):
+            raise NotFound(NO_INDEX, hint=NO_INDEX_HINT)
         tables = {}
-        for (name,) in db.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"):
-            tables[name] = [r[1] for r in db.execute(f'PRAGMA table_info("{name}")')]
+        for name in readable():
+            cols = [r[1] for r in db.execute(f'PRAGMA table_info("{name}")')]
+            if cols:
+                tables[name] = cols
     return {"database": str(paths.DB), "tables": tables,
-            "notes": "Read-only. days.date and activities.date are local calendar dates (YYYY-MM-DD). "
-                     "Full detail lives in the JSON/FIT files: use `fitdata day DATE --source NAME` and "
-                     "`fitdata activity ID --source NAME|--records`."}
+            "notes": "Read-only. days and activities are the project's shared views: one row per day and per "
+                     "activity, from every app of the project (source says which); garmin_files lists "
+                     "fitdata-garmin's stored files. days.date and activities.date are local calendar dates "
+                     "(YYYY-MM-DD). Full detail lives in the JSON/FIT files: use `fitdata day DATE --source "
+                     "NAME` and `fitdata activity ID --source NAME|--records`."}
 
 
 def sources() -> dict[str, Any]:

@@ -1,0 +1,50 @@
+# fitdata-garmin: the app of the fitdata project that archives Garmin data. Its commands are listed
+# by `fitdata-garmin --json describe`; AGENTS.md next to this file is its guide for AI agents.
+
+[app]
+name = "fitdata-garmin"
+title = "Garmin archive"
+version = "0.1.0"
+command = "fitdata-garmin"         # its console script (pyproject.toml); not a mes.App
+
+[data]
+# Its files are under <data folder>/garmin/. Its saved login (.state/) and its log (logs/) stay at
+# the top of the data folder, where they have always been (a documented exception for this app).
+folder = "garmin"
+writes = ["days", "activities"]    # its rows of the project's shared tables
+tables = ["garmin_files"]          # every stored file: path, kind, date, activity_id, bytes
+rebuild = "index"                  # rebuilds all of the above from the files under garmin/
+
+# The jobs match systemd/*.timer (the standalone way to run them; tests/test_project.py checks they
+# match). "--local" keeps a job on this machine even if the config names a remote. Every job only
+# talks to Garmin Connect (sign-in refresh and data). `fitdata-garmin login`, which is not a job (a
+# person runs it), also reaches mobile.integration.garmin.com during the sign-in itself.
+[jobs.activities]
+run = "activities-sync --days 2 --local"
+schedule = "*:0/10"                      # every 10 minutes: new activities
+network = ["connectapi.garmin.com", "connect.garmin.com", "diauth.garmin.com", "sso.garmin.com"]
+memory = "512M"
+timeout = "20m"
+
+[jobs.daily]
+run = "sync --days 3 --local"
+schedule = "*-*-* 07,13,22:30:00"        # 07:30, 13:30 and 22:30: the last 3 days' health data
+network = ["connectapi.garmin.com", "connect.garmin.com", "diauth.garmin.com", "sso.garmin.com"]
+memory = "512M"
+timeout = "30m"
+
+[jobs.backfill]
+run = "backfill --max-days 90 --local"
+schedule = "*-*-* 02:15:00"              # nightly: 90 more days of history until it is complete
+network = ["connectapi.garmin.com", "connect.garmin.com", "diauth.garmin.com", "sso.garmin.com"]
+memory = "512M"
+timeout = "3h"                           # about 35 throttled calls per day of history
+
+[ui]
+# Whole dashboards, in dashboards/<slug>.yaml. They read only the shared views days and activities,
+# so another app's days and activities show up in them too.
+dashboards = ["sleep", "activities", "trends"]
+
+# The Garmin readings on the project's Today page (ui/dashboards/overview.yaml).
+[ui.contributes.overview]
+sections = "dashboards/overview-garmin.yaml"

@@ -17,9 +17,11 @@ def test_select_works(run):
 
 
 @pytest.mark.parametrize("q", [
-    "SELECT name FROM sqlite_master",
     "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 5) SELECT sum(x) FROM c",
-    "SELECT json_extract('{\"a\": 1}', '$.a'), upper('x'), count(*) FROM files",
+    "SELECT json_extract('{\"a\": 1}', '$.a'), upper('x'), count(*) FROM garmin_files",
+    "SELECT j.value FROM days, json_each('[1, 2]') j",
+    "SELECT count(*) FROM days",
+    "WITH x AS (SELECT date FROM days) SELECT count(*) FROM x JOIN activities a ON a.date = x.date",
     "SELECT * FROM activities a JOIN days d ON a.date = d.date",
 ])
 def test_ordinary_reads_allowed(archive, q):
@@ -35,6 +37,16 @@ def test_ordinary_reads_allowed(archive, q):
     "PRAGMA user_version = 5",
     "PRAGMA table_info(days)",
     "SELECT * FROM pragma_table_info('days')",
+    "SELECT name FROM sqlite_master",
+    "SELECT * FROM days__rows",
+    "SELECT count(*) FROM activities__rows",
+    "SELECT * FROM days WHERE date IN (SELECT date FROM days__rows)",
+    "WITH days AS (SELECT * FROM days__rows) SELECT * FROM days",
+    "WITH activities AS (SELECT * FROM \"ACTIVITIES__ROWS\") SELECT count(*) FROM activities",
+    "WITH x AS (SELECT 1) SELECT * FROM x, [days__rows]",
+    "SELECT * FROM days WHERE source IN (SELECT source FROM `activities__rows`)",
+    "WITH days AS (SELECT * FROM other_app_secrets) SELECT * FROM days",
+    "SELECT * FROM other_app_secrets",
     "DELETE FROM days",
     "INSERT INTO days(date) VALUES ('2000-01-01')",
     "CREATE TABLE t(x)",
@@ -46,12 +58,16 @@ def test_ordinary_reads_allowed(archive, q):
 ])
 def test_everything_else_refused(archive, q):
     tmp = archive.parent
+    with sqlite3.connect(paths.DB) as db:  # a table of another app, in the same shared database
+        db.execute("CREATE TABLE IF NOT EXISTS other_app_secrets (x)")
+        db.execute("INSERT INTO other_app_secrets VALUES ('not for fitdata sql')")
     with pytest.raises(BadInput) as e:
         query.sql(q.format(tmp=tmp))
     assert "only read the index" in str(e.value) or "one statement" in str(e.value)
     assert not (tmp / "new.db").exists()
     with sqlite3.connect(paths.DB) as db:  # the index is untouched
         assert db.execute("SELECT count(*) FROM days").fetchone()[0] == 1
+        assert db.execute("SELECT count(*) FROM other_app_secrets").fetchone()[0] == 1
 
 
 def test_refusal_is_plain_language(run):
@@ -93,7 +109,7 @@ def test_odd_folder_name_does_not_change_uri(tmp_path, monkeypatch, archive):
 
 
 @pytest.mark.parametrize("q", [
-    "SELECT length(zeroblob(900000000)) AS a FROM files LIMIT 3",
+    "SELECT length(zeroblob(900000000)) AS a FROM garmin_files LIMIT 3",
     "SELECT printf('%.*c', 100000000, 'a') AS s",
     "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x < 600) "
     "SELECT sum(instr(printf('%.*c', 100000000 + x, 'a'), 'b')) AS s FROM c",

@@ -120,3 +120,17 @@ def _fresh_logger():
     for h in list(log.handlers):
         log.removeHandler(h)
         h.close()
+
+
+def easyui_for_project(repo: Path):
+    """my-easy-ui, when it is installed and reads this project's project.toml (the apps rework:
+    [project] apps, no [ui] data). Skips the test otherwise, saying why."""
+    pytest.importorskip("easyui", reason="my-easy-ui is not installed, so the dashboards were not checked with "
+                        "it. Run: uv run --with-editable <path to my-easy-ui> python -m pytest")
+    from easyui import appconfig, errors
+    try:
+        appconfig.load(repo)
+    except errors.EasyUIError as e:  # an easy-ui from before the apps rework
+        pytest.skip(f"this my-easy-ui does not read the apps layout of project.toml yet ({e})")
+    import easyui
+    return easyui

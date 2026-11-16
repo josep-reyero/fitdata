@@ -57,7 +57,7 @@ def test_hard_link_to_token_is_not_listed_or_indexed(run, archive, caplog):
     assert "hard link" in caplog.text and "processed/hrv.json" in caplog.text
     assert str(paths.ROOT) not in caplog.text  # keys, not this machine's paths
     index.rebuild()
-    code, out, _ = run("--json", "sql", "SELECT path FROM files")
+    code, out, _ = run("--json", "sql", "SELECT path FROM garmin_files")
     assert code == 0 and not any(r["path"].endswith("hrv.json") for r in json.loads(out))
 
 

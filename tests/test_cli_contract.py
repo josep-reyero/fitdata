@@ -65,17 +65,35 @@ def test_describe_arguments(run):
     assert "json" not in by["days"]  # the global flags are not repeated per command
 
 
-def test_describe_lists_the_jobs_of_project_toml(run):
-    jobs = {j["name"]: j for j in _describe(run)["jobs"]}
+def test_describe_lists_the_jobs_of_app_toml(run):
+    d = _describe(run)
+    assert d["short"] == "garmin" and d["project"] == "fitdata" and d["title"] == "Garmin archive"
+    jobs = {j["name"]: j for j in d["jobs"]}
     assert set(jobs) == {"activities", "daily", "backfill"}
-    assert jobs["backfill"]["run"] == "fitdata-garmin backfill --max-days 90 --local" and jobs["backfill"]["trigger"] == "schedule"
+    assert jobs["backfill"]["id"] == "fitdata-garmin.backfill" and jobs["backfill"]["app"] == "fitdata-garmin"
+    assert jobs["backfill"]["run"] == "backfill --max-days 90 --local" and jobs["backfill"]["trigger"] == "schedule"
+    assert jobs["daily"]["schedule"] == "*-*-* 07,13,22:30:00" and jobs["daily"]["timeout"] == "30m"
+
+
+def test_describe_applies_the_projects_settings(run, tmp_path, monkeypatch):
+    project = tmp_path / "project.toml"
+    project.write_text('[project]\nname = "fitdata"\napps = ["fitdata_garmin"]\n'
+                       '[settings.fitdata-garmin]\njobs.backfill.enabled = false\n'
+                       'jobs.daily.schedule = "*-*-* 08:00:00"\njobs.daily.timeout = "45m"\n'
+                       'jobs.activities.add_network = ["example.org"]\n')
+    monkeypatch.setattr(describe, "PROJECT_TOML", project)
+    jobs = {j["name"]: j for j in _describe(run)["jobs"]}
+    assert set(jobs) == {"activities", "daily"}  # backfill is switched off
+    assert jobs["daily"]["schedule"] == "*-*-* 08:00:00" and jobs["daily"]["timeout"] == "45m"
+    assert jobs["activities"]["network"][-1] == "example.org" and jobs["activities"]["memory"] == "512M"
 
 
 def test_describe_text_and_guide(run):
     code, out, _ = run("describe")
     assert code == 0 and "login" in out and "admin" in out and "This session may run" in out
     code, out, _ = run("--json", "guide")
-    assert code == 0 and json.loads(out)["guide"].startswith("# AGENTS.md")
+    guide = json.loads(out)
+    assert code == 0 and guide["app"] == "fitdata-garmin" and guide["guide"].startswith("# Garmin archive")
 
 
 def test_describe_never_forwards(run, monkeypatch):

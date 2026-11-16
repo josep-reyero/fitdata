@@ -8,11 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from conftest import use
+from conftest import easyui_for_project, use
 from fitdata_garmin import index, paths
 
 REPO = Path(__file__).resolve().parents[1]
-UI_DATA = tomllib.loads((REPO / "project.toml").read_text())["ui"]["data"]
+# The project's shared database: <data folder>/<project name>.sqlite (apps contract, section 4.1).
+UI_DATA = tomllib.loads((REPO / "project.toml").read_text())["project"]["name"] + ".sqlite"
 
 
 @pytest.fixture
@@ -37,7 +38,7 @@ def test_fitdata_uses_its_own_data_dir(two_configs, cli_run):
     archive, mes_home, _ = two_configs
     assert paths.ROOT == archive
     index.rebuild()
-    # The index the dashboards read is exactly <data_dir>/<[ui] data>.
+    # The index the dashboards read is exactly <data_dir>/fitdata.sqlite.
     assert (archive / UI_DATA).is_file() and paths.DB == archive / UI_DATA
     assert not mes_home.exists()  # fitdata never writes into mes's own folders
     links = [p for p in archive.parent.rglob("*") if p.is_symlink()]
@@ -58,8 +59,7 @@ def test_mes_config_does_not_move_fitdata(two_configs, tmp_path):
 
 
 def test_easy_ui_finds_the_index_through_the_override(two_configs):
-    pytest.importorskip("easyui", reason="my-easy-ui is not installed")
-    from easyui import appconfig
+    appconfig = easyui_for_project(REPO).appconfig
     archive, _, _ = two_configs
     index.rebuild()
     cfg = appconfig.load(REPO)
