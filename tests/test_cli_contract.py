@@ -250,3 +250,18 @@ def test_garmin_rate_limit_after_retries_becomes_rate_limited(monkeypatch):
 def test_errors_carry_their_exit_code(run, archive):
     code, out, err = run("--json", "day", "2001-01-01")
     assert json.loads(err)["exit_code"] == 3 == code
+
+
+@pytest.mark.parametrize("given, prog", [
+    ("fitdata garmin", "fitdata garmin"), ("fitdata fitdata-garmin", "fitdata fitdata-garmin"),
+    ("other thing", "fitdata-garmin"), (None, "fitdata-garmin"),
+])
+def test_hints_use_the_name_the_project_command_reached_the_app_by(monkeypatch, given, prog):
+    """One spelling in an error: `fitdata garmin days --help` after the project command's note."""
+    if given is None:
+        monkeypatch.delenv("MES_COMMAND_NAME", raising=False)
+    else:
+        monkeypatch.setenv("MES_COMMAND_NAME", given)
+    with pytest.raises(Exception) as e:
+        cli._parser().parse_args(["days", "--days", "abc"])
+    assert f"Run `{prog} days --help` to see what it accepts." in str(e.value)

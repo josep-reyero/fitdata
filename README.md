@@ -85,6 +85,19 @@ run `fitdata-garmin index`. The first rebuild logs "replaced the index of an ear
 SSH gate keeps working through the same link, and `[remote] command` on other machines can stay
 `~/.local/bin/fitdata`.
 
+What a script or an agent may notice after the update:
+
+- `fitdata sql`: the table `files` is now called `garmin_files` (a query that still says `files`
+  is told so). `days` and `activities` are now views that start with a `source` column (the app a
+  row came from, `fitdata-garmin` for now), so `SELECT *` shows one more column; the `days` and
+  `activities` commands leave it out, as before. Numbers come back as Garmin gave them, as before.
+- `fitdata --json describe` describes the project: its apps under `apps`, and, while
+  fitdata-garmin is the only app, its `commands` (and `global_options`) at the top level too.
+  `fitdata-garmin --json describe` is the app's own, unchanged. `fitdata --help` lists the app's
+  commands under "Garmin archive (fitdata garmin ...)".
+- `fitdata <command>` prints, once per terminal session and never with `--json`, a note that
+  `fitdata garmin <command>` is the form that keeps working when the project gets more apps.
+
 fitdata creates its files for its owner only (umask 077): the archive, the index, the logs and the
 saved login. Files made by an earlier version keep their permissions; to make them owner-only too:
 `chmod -R go-rwx <data_dir>`.

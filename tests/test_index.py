@@ -245,3 +245,30 @@ def test_a_database_without_the_index_says_so(tmp_path, monkeypatch, cli_run):
 
 def test_schema_mismatch_is_a_fitdata_error():
     assert issubclass(index.SchemaMismatch, FitdataError)
+
+
+def test_numbers_keep_the_form_garmin_gave_them(run):
+    """The old index kept every value as written (its columns had no type). Whole numbers must
+    not come back as 144.0 and decimals must stay decimals, in days, activities and summary."""
+    ddir = paths.day_dir(DAY)
+    m = json.loads((ddir / "day.json").read_text())
+    m["headline"].update({"distance_m": 5123, "calories": 2100, "active_calories": 512.0, "floors_up": 7,
+                          "vo2max_running": 52.4})
+    (ddir / "day.json").write_text(json.dumps(m))
+    adir = next((ddir / "activities").iterdir())
+    a = json.loads((adir / "activity.json").read_text())
+    a.update({"avg_hr": 144, "max_hr": 171, "calories": 512, "ascent_m": 23, "descent_m": 22.5, "avg_cadence": 168,
+              "vo2max": 52, "avg_power": 250, "duration_s": 1800.0, "distance_m": 5000.0})
+    (adir / "activity.json").write_text(json.dumps(a))
+    index.rebuild()
+    _, out, _ = run("--json", "days", "--from", DAY, "--to", DAY)
+    (day,) = json.loads(out, parse_float=lambda t: ("float", t))
+    assert [day[k] for k in ("distance_m", "calories", "floors_up", "steps")] == [5123, 2100, 7, 1234]
+    assert day["active_calories"] == ("float", "512.0") and day["vo2max_running"] == ("float", "52.4")
+    _, out, _ = run("--json", "activities", "--days", "3650")
+    (act,) = json.loads(out, parse_float=lambda t: ("float", t))
+    assert [act[k] for k in ("avg_hr", "max_hr", "calories", "ascent_m", "avg_cadence", "vo2max", "avg_power")] == \
+        [144, 171, 512, 23, 168, 52, 250]
+    assert act["descent_m"] == ("float", "22.5") and act["duration_s"] == ("float", "1800.0")
+    _, out, _ = run("--json", "summary", "--days", "3650")
+    assert "144.0" not in out and "5123.0" not in out

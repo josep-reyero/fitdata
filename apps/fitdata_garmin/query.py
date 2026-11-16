@@ -302,6 +302,10 @@ def _sql(db: sqlite3.Connection, query: str, limit: int | None, timeout_s: float
             db.set_authorizer(None)  # the sandbox is done with; this only looks at the file's own list
             if not _has_index(db):
                 raise NotFound(NO_INDEX, hint=NO_INDEX_HINT) from None
+            if re.search(r"no such table: (?:main\.)?files\b", msg):
+                raise BadInput("The table files is now called garmin_files (it belongs to the Garmin app of "
+                               "this project), so that query found no table files. Change FROM files to FROM "
+                               "garmin_files and run it again.") from None
         if "interrupted" in msg:
             raise BadInput(f"That query was still running after {timeout_s:g} seconds, so fitdata "
                            "stopped it. Narrow it down, for example with a WHERE on date.") from None

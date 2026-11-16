@@ -63,8 +63,15 @@ class _Parser(argparse.ArgumentParser):
                        "to see what it accepts.")
 
 
+def _prog() -> str:
+    """How the person reached this program: `fitdata garmin` when the project command ran it (it sets
+    MES_COMMAND_NAME), else fitdata-garmin. Only used in usage lines and hints."""
+    given = os.environ.get("MES_COMMAND_NAME")
+    return given if given in ("fitdata garmin", "fitdata fitdata-garmin") else "fitdata-garmin"
+
+
 def _parser() -> argparse.ArgumentParser:
-    p = _Parser(prog="fitdata-garmin", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = _Parser(prog=_prog(), description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.add_argument("--local", action="store_true", help="use this machine's archive even if a remote is configured")
     p.add_argument("-v", "--verbose", action="store_true", help="more detail in the log")

@@ -16,7 +16,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-SQL_TYPES = {"text": "TEXT", "integer": "INTEGER", "real": "REAL", "boolean": "INTEGER", "json": "TEXT"}
+SQL_TYPES = {"text": "TEXT", "integer": "INTEGER", "real": "REAL", "number": "", "boolean": "INTEGER", "json": "TEXT"}
 
 
 def _q(name: str) -> str:
@@ -38,7 +38,7 @@ def schema_sql(project: dict, app_names: list[str]) -> str:
         key: list[str] = t["key"]
         lines = ['  "source" TEXT NOT NULL,']
         lines += [f"  {_q(k)} {SQL_TYPES[cols[k]]} NOT NULL," for k in key]
-        lines += [f"  {_q(c)} {SQL_TYPES[ty]}," for c, ty in cols.items() if c not in key]
+        lines += [f"  {_q(c)} {SQL_TYPES[ty]},".replace(" ,", ",") for c, ty in cols.items() if c not in key]
         lines.append(f"  PRIMARY KEY ({', '.join(_q(c) for c in ['source', *key])})")
         out.append(f"CREATE TABLE IF NOT EXISTS {_q(name + '__rows')} (\n" + "\n".join(lines) + "\n);")
         out.append(f"CREATE INDEX IF NOT EXISTS {_q(name + '__rows_key')} ON {_q(name + '__rows')} "

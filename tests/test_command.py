@@ -66,6 +66,11 @@ def project(tmp_path, monkeypatch):
     monkeypatch.setenv("MES_PROJECT_DIR", str(root))
     monkeypatch.setattr(sys, "executable", str(bin_ / "python"))
     monkeypatch.delenv("MES_ALLOW", raising=False)
+    monkeypatch.setenv("MES_COMMAND_NAME", "x")
+    monkeypatch.delenv("MES_COMMAND_NAME")  # restored (unset) after the test
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    monkeypatch.setattr(command.tempfile, "gettempdir", lambda: str(notes))
 
     def fake_execv(path, argv):
         raise Exec(path, argv)
@@ -88,16 +93,41 @@ def _second_app(root: Path) -> None:
 # ------------------------------------------------------------------ handing commands to the app
 
 @pytest.mark.parametrize("argv, note_word", [
-    (["sync", "--days", "3", "--local"], "sync"),
+    (["sync", "--days", "3", "--local"], "sync --days 3 --local"),
     (["status"], "status"),
     (["login"], "login"),
-    (["--local", "sync"], "--local"),          # leading options fall through too
-    (["-v", "backfill", "--max-days", "90"], "-v"),
+    (["--local", "sync"], "--local sync"),          # leading options fall through too
+    (["-v", "backfill", "--max-days", "90"], "-v backfill --max-days 90"),
 ])
 def test_old_command_lines_reach_the_only_app_unchanged_with_a_note(project, capsys, argv, note_word):
     program, args, out, err = _dispatch(argv, capsys)
     assert program == "fitdata-garmin" and args == argv
     assert out == "" and err == NOTE.format(w=note_word)
+    program, args, out, err = _dispatch(argv, capsys)  # at most once per terminal session
+    assert program == "fitdata-garmin" and args == argv and out == "" and err == ""
+
+
+@pytest.mark.parametrize("argv", [["sync", "--help"], ["login", "-h"]])
+def test_no_note_when_asking_for_help(project, capsys, argv):
+    program, args, out, err = _dispatch(argv, capsys)
+    assert program == "fitdata-garmin" and args == argv and err == ""
+
+
+def test_with_one_app_help_and_describe_carry_its_commands(project, capsys):
+    """Readers of the old `fitdata --help` and `fitdata --json describe` still find the commands."""
+    assert command.main(["--help"]) == 0
+    assert "fitdata garmin hello  says hello" in capsys.readouterr().out
+    assert command.main(["--json", "describe"]) == 0
+    d = json.loads(capsys.readouterr().out)
+    assert d["commands"] == [{"name": "hello", "kind": "read", "help": "says hello"}]
+    _second_app(project[0])
+    assert command.main(["--json", "describe"]) == 0
+    assert "commands" not in json.loads(capsys.readouterr().out)
+
+
+def test_the_app_is_told_how_it_was_reached(project, capsys):
+    _dispatch(["garmin", "status"], capsys)
+    assert os.environ["MES_COMMAND_NAME"] == "fitdata garmin"
 
 
 @pytest.mark.parametrize("argv", [["--json", "days", "--days", "7"], ["days", "--json"], ["--json", "summary"]])
@@ -149,8 +179,10 @@ def test_several_apps_need_the_apps_name(project, capsys):
     _second_app(project[0])
     assert command.main(["sync"]) == 2
     err = capsys.readouterr().err
-    assert 'fitdata has several apps, so "sync" does not say which one is meant.' in err
-    assert "garmin, strava" in err and "fitdata garmin sync" in err
+    assert '"sync" is not one of the apps of fitdata (garmin, strava), so nothing was run.' in err
+    assert "fitdata garmin --help" in err
+    assert command.main(["stava", "hello"]) == 2
+    assert 'Did you mean "fitdata strava hello"?' in capsys.readouterr().err
     assert command.main(["--json", "sync"]) == 2
     assert json.loads(capsys.readouterr().err)["exit_code"] == 2
     program, args, _, _ = _dispatch(["strava", "hello"], capsys)
@@ -435,10 +467,12 @@ def _installed():
         pytest.skip("the project's .venv has no fitdata programs (run: uv sync)")
 
 
-def test_the_installed_fitdata_gives_the_same_answers_as_fitdata_garmin(archive):
+def test_the_installed_fitdata_gives_the_same_answers_as_fitdata_garmin(archive, tmp_path):
     """Through the real console scripts: every existing way of asking keeps its output."""
     _installed()
-    env = {k: v for k, v in os.environ.items() if k != "MES_PROJECT_DIR"}
+    env = {k: v for k, v in os.environ.items() if k not in ("MES_PROJECT_DIR", "MES_COMMAND_NAME")}
+    (tmp_path / "tmp").mkdir()
+    env["TMPDIR"] = str(tmp_path / "tmp")  # the once-per-session note mark
 
     def run(program, *argv):
         r = subprocess.run([str(VENV_BIN / program), *argv], capture_output=True, text=True, env=env, timeout=60)
@@ -477,8 +511,10 @@ def test_remote_requests_go_through_both_project_commands(archive, tmp_path):
     fake_ssh.write_text(f'#!/bin/sh\nfor last; do :; done\nprintf "%s\\n" "$last" >> "{calls}"\n'
                         'unset FITDATA_REMOTE\nexec /bin/sh -c "$last"\n')
     fake_ssh.chmod(0o755)
-    env = {k: v for k, v in os.environ.items() if k != "MES_PROJECT_DIR"}
-    env.update(HOME=str(tmp_path / "home"), PATH=f"{fake_ssh.parent}:/usr/bin:/bin", FITDATA_REMOTE="archive-host")
+    env = {k: v for k, v in os.environ.items() if k not in ("MES_PROJECT_DIR", "MES_COMMAND_NAME")}
+    (tmp_path / "tmp").mkdir()
+    env.update(HOME=str(tmp_path / "home"), PATH=f"{fake_ssh.parent}:/usr/bin:/bin", FITDATA_REMOTE="archive-host",
+               TMPDIR=str(tmp_path / "tmp"))
 
     def run(*argv):
         r = subprocess.run([str(VENV_BIN / "fitdata"), *argv], capture_output=True, text=True, env=env, timeout=60)
@@ -486,6 +522,6 @@ def test_remote_requests_go_through_both_project_commands(archive, tmp_path):
     code, out, err = run("--json", "sql", "SELECT count(*) AS n FROM days")
     assert code == 0 and json.loads(out) == [{"n": 1}] and err == ""
     code, out, err = run("days", "--from", "2026-11-14", "--to", "2026-11-14")
-    assert code == 0 and "2026-11-14" in out and err == NOTE.format(w="days")
+    assert code == 0 and "2026-11-14" in out and err == NOTE.format(w="days --from 2026-11-14 --to 2026-11-14")
     sent = calls.read_text().splitlines()
     assert len(sent) == 2 and all(s.startswith("~/.local/bin/fitdata --forwarded-argv ") for s in sent)

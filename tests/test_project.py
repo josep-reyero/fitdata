@@ -51,7 +51,7 @@ def test_project_table():
 def test_shared_tables():
     tables = PROJECT["tables"]
     assert list(tables) == ["days", "activities"]
-    types = {"text", "integer", "real", "boolean", "json"}
+    types = {"text", "integer", "real", "number", "boolean", "json"}
     for name, t in tables.items():
         assert set(t) <= {"columns", "key", "prefer"}
         assert all(re.fullmatch(r"[a-z][a-z0-9_]{0,62}", c) and c != "source" for c in t["columns"])

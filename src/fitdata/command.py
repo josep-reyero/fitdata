@@ -12,7 +12,12 @@ of the project command of the apps contract (section 5), with the standard libra
                                     `fitdata-garmin sync` (the short name or the full app name)
     fitdata <command> ...           while the project has exactly one app, the same as
                                     `fitdata <that app> <command> ...`, with a one-line note on
-                                    stderr (none with --json): `fitdata sync --days 3` still works
+                                    stderr at most once per terminal session (none with --json,
+                                    -h or --help): `fitdata sync --days 3` still works
+
+The app's program gets MES_COMMAND_NAME="fitdata <short>" so that its usage lines and hints say
+`fitdata garmin ...`. While there is one app, `fitdata --help` also lists that app's commands and
+`fitdata --json describe` also carries its `commands` and `global_options` at the top level.
 
 An app's program always runs itself (os.execv), so its output, exit code, terminal and its own
 MES_ALLOW checks are exactly the app's: nothing can be reached through this command that the app
@@ -35,9 +40,11 @@ import hashlib
 import json
 import os
 import re
+import difflib
 import stat
 import subprocess
 import sys
+import tempfile
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -409,7 +416,10 @@ def describe(project: Project, level: str) -> dict[str, Any]:
     return {"project": project.name, "title": project.title, "version": project.version, "command": project.name,
             "allowed": level, "json": JSON_NOTE, "exit_codes": dict(EXIT_CODES), "apps": apps,
             # Jobs are composed from the app.toml files by mes; this command does not import mes.
-            "jobs": []}
+            "jobs": [],
+            # One app: its commands are the project's, where a reader of the old describe looks for them.
+            **({k: apps[0]["describe"][k] for k in ("commands", "global_options") if k in apps[0]["describe"]}
+               if len(apps) == 1 else {})}
 
 
 def describe_text(d: dict[str, Any]) -> str:
@@ -455,7 +465,7 @@ def apps_list(project: Project) -> dict[str, Any]:
                       "location": "in-project" if a.in_project else "installed"} for a in project.apps]}
 
 
-def help_text(project: Project) -> str:
+def help_text(project: Project, commands: list[dict] | None = None) -> str:
     lines = [f"{project.title} ({project.name}): the project command. It hands each command to one of the project's apps.",
              "", "Built-in commands (add --json for data):",
              f"  {project.name} describe     every app, with its commands and what each may do",
@@ -467,6 +477,11 @@ def help_text(project: Project) -> str:
         a = project.apps[0]
         lines += ["", f"While {a.name} is the only app, `{project.name} <command>` runs it too "
                   f"(`{project.name} {a.short} <command>` keeps working when more apps are added)."]
+        if commands:
+            width = max(len(str(c.get("name", ""))) for c in commands)
+            lines += ["", f"{a.title} ({project.name} {a.short} ...):"]
+            lines += [f"  {project.name} {a.short} {str(c.get('name', '')).ljust(width)}  "
+                      f"{(c.get('help') or '').splitlines()[0] if c.get('help') else ''}".rstrip() for c in commands]
     lines += ["", f"For an app's own commands: {project.name} {project.apps[0].short} --help"]
     return "\n".join(lines)
 
@@ -478,8 +493,49 @@ def _print(data: Any) -> None:
     print()
 
 
+_COMMAND_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{1,30} [a-z][a-z0-9-]{0,30}\Z")
+
+
+def _typed(words: list[str]) -> str:
+    text = " ".join(words)
+    return text if len(text) <= 60 else text[:57] + "..."
+
+
+def _note_once(project: Project) -> bool:
+    """True the first time in this terminal session (per project and user) that the one-app note is
+    due: an empty mark file in the temporary folder, made with O_EXCL and never through a link. When
+    it cannot be made, the note is shown."""
+    try:
+        sid = os.getsid(0)
+    except OSError:
+        return True
+    mark = Path(tempfile.gettempdir()) / f"fitdata-note-{project.name}-{os.getuid()}-{sid}"
+    try:
+        fd = os.open(mark, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    except FileExistsError:
+        return False
+    except OSError:
+        return True
+    os.close(fd)
+    return True
+
+
+def _one_app_commands(project: Project) -> list[dict]:
+    """The only app's commands, for the help (empty when there are several apps or it does not answer)."""
+    if len(project.apps) != 1:
+        return []
+    try:
+        cmds = _run_json(project, project.apps[0], "describe").get("commands")
+    except Problem:
+        return []
+    return [c for c in cmds if isinstance(c, dict)] if isinstance(cmds, list) else []
+
+
 def _exec(project: Project, app: App, args: list[str]) -> NoReturn:
     program = project.program_path(app)
+    name_as = f"{project.name} {app.short}"
+    if _COMMAND_NAME_RE.match(name_as):
+        os.environ["MES_COMMAND_NAME"] = name_as
     sys.stdout.flush()
     sys.stderr.flush()
     os.execv(str(program), [str(program), *args])
@@ -514,13 +570,13 @@ def run(argv: list[str]) -> int:
     if not words:
         if as_json:
             return _builtin(project, "describe", [], True)
-        print(help_text(project))
+        print(help_text(project, _one_app_commands(project)))
         return 0
     w = words[0]
     rest = list(argv)
     rest.remove(w)  # the arguments without that one word (its first occurrence)
     if w in ("-h", "--help", "help"):
-        print(help_text(project))
+        print(help_text(project, _one_app_commands(project)))
         return 0
     if w in BUILTINS:
         return _builtin(project, w, rest, as_json)
@@ -533,15 +589,21 @@ def run(argv: list[str]) -> int:
             _exec(project, target, list(argv))
     if len(project.apps) == 1:
         app = project.apps[0]
-        if not as_json:
-            print(f'Note: "{project.name} {w}" was passed to {app.name}, the only app of this project. '
-                  f'Write "{project.name} {app.short} {w}" so it keeps working when the project has more apps.',
+        if not as_json and not any(a in ("-h", "--help") for a in words) and _note_once(project):
+            typed = _typed(words)
+            print(f'Note: "{project.name} {typed}" was passed to {app.name}, the only app of this project. '
+                  f'Write "{project.name} {app.short} {typed}" so it keeps working when the project has more apps.',
                   file=sys.stderr)
         _exec(project, app, list(argv))
-    shorts = ", ".join(a.short for a in project.apps)
-    raise Problem(f'{project.name} has several apps, so "{w}" does not say which one is meant.',
-                  hint=f"Start with the app's short name: {shorts}. For example: "
-                  f"{project.name} {project.apps[0].short} {w}.", kind="usage", code=2)
+    shorts = [a.short for a in project.apps]
+    close = difflib.get_close_matches(w, shorts, n=1)
+    names = " or ".join([", ".join(shorts[:-1]), shorts[-1]])
+    hint = (f'Did you mean "{project.name} {_typed([close[0], *words[1:]])}"?' if close else
+            f"Start with one of its apps: {names}. For example, {project.name} {shorts[0]} --help lists what "
+            f"{shorts[0]} can do.")
+    raise Problem(f'"{_typed([w])}" is not one of the apps of {project.name} ({", ".join(shorts)}), so nothing was '
+                  "run. With more than one app, every command starts with the app's short name.",
+                  hint=hint, kind="usage", code=2)
 
 
 def _report(e: Problem, as_json: bool) -> None:
