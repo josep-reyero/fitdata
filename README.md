@@ -1,5 +1,11 @@
 # fitdata
 
+> **Rework in progress.** This project is being restructured so that `fitdata-garmin` becomes a
+> proper app package inside the `fitdata` project
+> ([design](https://github.com/josep-reyero/my-easy-software/blob/main/docs/apps.md)). Until this
+> note is removed, expect the layout of this repository and its project file to change. The
+> commands and your archive keep working.
+
 Keep your own complete copy of your Garmin data, and use it any way you like:
 
 - **A CLI for agents.** Every command answers in plain text or, with `--json`, in data an AI agent
