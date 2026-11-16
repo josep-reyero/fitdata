@@ -60,17 +60,16 @@ def test_other_apps_rows_and_tables_are_never_touched(archive):
         assert db.execute("SELECT count(*) FROM activities").fetchone()[0] == 1
 
 
-def test_merge_view_with_a_second_installed_app(archive, tmp_path, monkeypatch):
-    """With the schema of a project that lists two apps (made by the same generator as
-    schema.sql), days merges column by column and activities keeps both apps' rows."""
+def test_merge_view_with_a_second_installed_app(archive, tmp_path):
+    """mes db sync made the views for a project that lists two apps (same generator as
+    schema.sql). The index then runs its own one-app copy of schema.sql, which must keep those
+    views: days merges column by column and activities keeps both apps' rows (contract 4.4, rule 2)."""
     import tomllib
     from schema_script import schema_sql
     from test_schema import REPO
     project = tomllib.loads((REPO / "project.toml").read_text())
-    two = tmp_path / "schema.sql"
-    two.write_text(schema_sql(project, ["fitdata-garmin", OTHER]))
-    monkeypatch.setattr(index, "SCHEMA_SQL", two)
     with _db() as db:
+        db.executescript(schema_sql(project, ["fitdata-garmin", OTHER]))  # what mes db sync does
         db.execute("INSERT INTO days__rows (source, date, steps, sleep_score) VALUES (?, ?, 99, 80)", (OTHER, DAY))
         db.execute("INSERT INTO days__rows (source, date, steps) VALUES (?, '2026-01-01', 5)", (OTHER,))
         db.execute("INSERT INTO activities__rows (source, id, date, type) VALUES (?, 7, ?, 'cycling')", (OTHER, DAY))
@@ -80,6 +79,17 @@ def test_merge_view_with_a_second_installed_app(archive, tmp_path, monkeypatch):
                     {"source": "fitdata-garmin", "date": DAY, "steps": 1234, "sleep_score": 80}]
     assert [r["source"] for r in query.sql("SELECT source FROM activities ORDER BY source")] == ["fitdata-garmin", OTHER]
     assert [d["date"] for d in query.days(DAY, DAY)] == [DAY]
+
+
+def test_missing_views_are_made_from_schema_sql(archive):
+    """A file without the views (new, or after mes db sync --reset) gets them from schema.sql."""
+    with _db() as db:
+        db.execute('DROP VIEW "days"')
+    index.rebuild()
+    with _db() as db:
+        kinds = dict(db.execute("SELECT name, type FROM sqlite_master WHERE name IN ('days', 'activities')"))
+        assert kinds == {"days": "view", "activities": "view"}
+        assert db.execute("SELECT count(*) FROM days").fetchone()[0] == 1
 
 
 def _old_index(path):

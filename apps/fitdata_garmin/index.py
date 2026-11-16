@@ -8,7 +8,8 @@ contract, section 4). fitdata-garmin keeps in it:
     activities__rows  its rows of the shared table activities: one per activity
     garmin_files      its own table: every stored file (path, kind, date, activity_id, bytes)
 
-Readers use the views days and activities, which schema.sql creates; never the __rows tables.
+Readers use the views days and activities, which schema.sql creates when they are missing (once
+they exist, `mes db sync` keeps them in line with project.toml); never the __rows tables.
 The columns are fixed by project.toml [tables]; schema.sql next to this file is the exact text
 `mes db schema --sql` prints for it. fitdata does not import mes: it follows the contract's
 plain-SQL rules (section 4.4). It writes only rows whose source is its own name, deletes only its
@@ -26,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -68,6 +70,25 @@ def schema_statements() -> list[str]:
         raise SchemaMismatch(f"{SCHEMA_SQL} ends in the middle of a statement, so the index was not rebuilt.",
                              hint="Reinstall fitdata: git checkout -- apps/fitdata_garmin/schema.sql, then "
                              "uv sync --locked --no-dev.")
+    return out
+
+
+_VIEW_STATEMENT = re.compile(r'\A(?:DROP VIEW IF EXISTS|CREATE VIEW) "([a-z][a-z0-9_]*)"')
+
+
+def schema_to_run(db: sqlite3.Connection, statements: list[str]) -> list[str]:
+    """The statements of schema.sql to run on this file (apps contract 4.4, rule 2): every CREATE
+    TABLE / CREATE INDEX (they are IF NOT EXISTS, so they never change what is there), and a view's
+    DROP VIEW / CREATE VIEW only when that view does not exist yet. Existing views belong to mes
+    (`mes db sync`): this copy of the script lists the apps of the day it was made, and running its
+    views again would hide the rows of every app added since."""
+    views = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'view'")}
+    out = []
+    for s in statements:
+        m = _VIEW_STATEMENT.match(s)
+        if m and m.group(1) in views:
+            continue
+        out.append(s)
     return out
 
 
@@ -258,7 +279,7 @@ def _write(statements: list[str], expected: dict[str, list[tuple]], days: list[d
         db.execute("BEGIN IMMEDIATE")
         try:
             old = _drop_old_index(db)
-            for s in statements:
+            for s in schema_to_run(db, statements):
                 db.execute(s)
             _check_columns(db, expected)
             for table, rows in (("days", days), ("activities", acts)):
