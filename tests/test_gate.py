@@ -138,3 +138,50 @@ def test_the_gate_with_the_real_fitdata(tmp_path, archive):
     assert r.returncode == 0, r.stderr
     r = ask("write", ["--json", "login"])
     assert r.returncode == 4
+
+
+def test_the_gate_prefers_fitdata_garmin(gate, tmp_path):
+    """With both programs next to it (today's install), the gate runs fitdata-garmin directly."""
+    gate_path, record = gate
+    other = tmp_path / "other.txt"
+    (gate_path.parent / "fitdata-garmin").write_text(RECORDER.format(record=other))
+    (gate_path.parent / "fitdata-garmin").chmod(0o755)
+    r = _run(gate_path, f"fitdata --forwarded-argv {TOKEN}", "read")
+    assert r.returncode == 0, r.stderr
+    assert other.read_text().split("---\n")[0].splitlines() == ["--forwarded-argv", TOKEN] and not record.exists()
+
+
+def test_the_gate_without_any_program_runs_nothing(gate):
+    gate_path, record = gate
+    (gate_path.parent / "fitdata").unlink()
+    r = _run(gate_path, f"fitdata --forwarded-argv {TOKEN}", "read")
+    assert r.returncode == 1 and "fitdata-garmin or fitdata" in r.stderr and not record.exists()
+
+
+VENV_BIN = REPO / ".venv" / "bin"
+
+
+@pytest.mark.parametrize("names", [("fitdata",), ("fitdata", "fitdata-garmin")])
+def test_the_gate_through_the_installed_programs(tmp_path, archive, names):
+    """End to end with the programs `uv sync` installs, linked next to the gate as the README says:
+    an older install with only `fitdata` (the project command, which hands the request to
+    fitdata-garmin) and today's with both. Read stays read; nothing extra reaches stdout."""
+    if not all((VENV_BIN / n).exists() for n in ("fitdata", "fitdata-garmin")):
+        pytest.skip("the project's .venv has no fitdata programs (run: uv sync)")
+    folder = tmp_path / "gatebin"
+    folder.mkdir()
+    shutil.copy(GATE, folder / "fitdata-ssh-gate")
+    (folder / "fitdata-ssh-gate").chmod(0o755)
+    for n in names:
+        (folder / n).symlink_to(VENV_BIN / n)
+    env = {"FITDATA_DATA_DIR": os.environ["FITDATA_DATA_DIR"], "FITDATA_CONFIG": os.environ["FITDATA_CONFIG"]}
+
+    def ask(level, argv):
+        return _run(folder / "fitdata-ssh-gate", f"fitdata {cli.FORWARDED} {cli._encode_argv(argv)}", level, env=env)
+
+    r = ask("read", ["--json", "sql", "SELECT count(*) AS n FROM days"])
+    assert r.returncode == 0 and json.loads(r.stdout) == [{"n": 1}] and r.stderr == "", r.stderr
+    r = ask("read", ["days", "--days", "3"])  # no --json: still no note from the project command
+    assert r.returncode == 0 and "Note:" not in r.stderr, r.stderr
+    r = ask("read", ["--json", "index"])
+    assert r.returncode == 4 and json.loads(r.stderr)["kind"] == "not_allowed"

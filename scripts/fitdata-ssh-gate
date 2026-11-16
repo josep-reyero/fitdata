@@ -10,8 +10,9 @@
 #
 # What the other machine's fitdata sends is always one line: `<its fitdata command>
 # --forwarded-argv <base64url>`. This gate accepts exactly that shape and nothing else, ignores the
-# first word (it never runs what the caller names), and starts the fitdata next to this script
-# with MES_ALLOW set to the level above and MES_VIA_GATE=1, in a clean environment.
+# first word (it never runs what the caller names), and starts the fitdata-garmin next to this
+# script (or, on an older install, the fitdata there) with MES_ALLOW set to the level above and
+# MES_VIA_GATE=1, in a clean environment.
 # Anything else (a shell, scp, another command, extra words, odd characters) is refused (exit 4).
 
 LC_ALL=C
@@ -52,7 +53,15 @@ case $0 in
     */*) here=${0%/*} ;;
     *) refuse "set it up with its full path in authorized_keys, for example command=\"/home/you/.local/bin/fitdata-ssh-gate read\"." 1 ;;
 esac
-[ -x "$here/fitdata" ] || refuse "there is no fitdata next to this gate ($here/fitdata), so nothing was run." 1
+# The program that reads the request: fitdata-garmin (the app whose request format this is), or, on
+# an install from before the project command existed, the fitdata next to this gate.
+if [ -x "$here/fitdata-garmin" ]; then
+    program=$here/fitdata-garmin
+elif [ -x "$here/fitdata" ]; then
+    program=$here/fitdata
+else
+    refuse "there is no fitdata-garmin or fitdata next to this gate (in $here), so nothing was run." 1
+fi
 
 # A clean environment: nothing the SSH client sends (LC_*, LANG...) or the login brings along
 # reaches fitdata, except where fitdata's own settings are.
@@ -62,4 +71,4 @@ for name in USER LOGNAME FITDATA_CONFIG FITDATA_DATA_DIR FITDATA_STORAGE; do
     eval "isset=\${$name+x}"
     [ -n "$isset" ] && set -- "$@" "$name=$value"
 done
-exec /usr/bin/env -i "$@" "$here/fitdata" --forwarded-argv "$token"
+exec /usr/bin/env -i "$@" "$program" --forwarded-argv "$token"

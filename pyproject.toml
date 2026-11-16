@@ -18,14 +18,14 @@ bucket = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "pyyaml>=6"]  # pyyaml: the dashboard tests read the YAML files
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
 [project.scripts]
 # The project command: hands each command to the project's apps (README, "Commands").
-fitdata = "fitdata_garmin.cli:main"
+fitdata = "fitdata.command:main"
 # The project's one app so far: the Garmin archive.
 fitdata-garmin = "fitdata_garmin.cli:main"
 
