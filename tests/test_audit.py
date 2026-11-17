@@ -201,6 +201,7 @@ def test_only_one_sql_at_a_time(run, archive):
 def test_sql_lock_is_not_followed_through_a_link(run, archive, tmp_path):
     victim = tmp_path / "victim.txt"
     victim.write_text("keep")
+    (paths.STATE / "sql.lock").unlink(missing_ok=True)  # the index made a real one
     os.symlink(victim, paths.STATE / "sql.lock")
     code, _, err = run("sql", "SELECT 1")
     assert code == 5 and "Traceback" not in err and str(tmp_path) not in err

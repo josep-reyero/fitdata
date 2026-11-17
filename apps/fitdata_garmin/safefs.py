@@ -377,22 +377,82 @@ def inside_state(path: Path, state_dir: Path, opened: os.stat_result) -> bool:
 
 # ------------------------------------------------------------------ locks
 
-@contextmanager
-def hold_lock(path, busy: str = "Another fitdata sync is running on this archive, so this one did not start.",
-              hint: str = "Nothing to do: the next run picks up where that one ends."):
-    """An exclusive, non-blocking lock on a file in .state/ (owner-only). The lock file is opened
-    without following a link and is never truncated. Busy: Temporary (exit 75)."""
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)  # .state holds the login token
+# What open() says when the file or its folder cannot be written here: a read-only data folder (the
+# read-level sandbox binds it read-only), or a folder that is not this account's to change.
+_READ_ONLY_ERRNOS = {errno.EROFS, errno.EACCES, errno.EPERM}
+
+
+def _lock_problem(e: OSError, path) -> Exception:
+    from .errors import FitdataError, Refused
+    if e.errno in _LINK_ERRNOS:
+        return Refused(f"The lock file {path.name} in the folder of the saved Garmin login (.state) is a "
+                       "symbolic link, so fitdata did not use it and did not start.",
+                       hint=f"Remove .state/{path.name} in the data folder; fitdata makes a new one.")
+    return FitdataError(f"fitdata could not open its lock file .state/{path.name} ({e.strerror}), so it "
+                        "did not start.", hint="Check that the data folder belongs to you.")
+
+
+def _open_lock(path, read_only_ok: bool) -> int | None:
+    """The lock file, opened without following a link and never truncated. With read_only_ok, a
+    data folder that cannot be written here is fine: an existing lock file is opened read-only (a
+    lock works on it all the same), and a missing one that cannot be made gives None."""
     try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)  # .state holds the login token
+    except OSError as e:
+        if not (read_only_ok and e.errno in _READ_ONLY_ERRNOS):
+            raise _lock_problem(e, path) from None
+    try:
+        return os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | _CLOEXEC, 0o600)
+    except OSError as e:
+        if not (read_only_ok and e.errno in _READ_ONLY_ERRNOS | {errno.ENOENT}):
+            raise _lock_problem(e, path) from None
+    # O_NONBLOCK: a pipe put in its place must not hang the command; it is refused just below.
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | _CLOEXEC)
+    except OSError as e:
+        if e.errno in _MISSING_ERRNOS:
+            return None
+        raise _lock_problem(e, path) from None
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        from .errors import Refused
+        raise Refused(f"The lock file {path.name} in the folder of the saved Garmin login (.state) is not an "
+                      "ordinary file, so fitdata did not use it and did not start.",
+                      hint=f"Remove .state/{path.name} in the data folder; fitdata makes a new one.")
+    return fd
+
+
+def make_lock_file(path) -> bool:
+    """Create the lock file if it is missing (owner-only, never through a link), so that commands
+    that may only read the data folder can still take it. False when it could not be made."""
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | _CLOEXEC, 0o600)
     except OSError as e:
-        from .errors import FitdataError, Refused
-        if e.errno in _LINK_ERRNOS:
-            raise Refused(f"The lock file {path.name} in the folder of the saved Garmin login (.state) is a "
-                          "symbolic link, so fitdata did not use it and did not start.",
-                          hint=f"Remove .state/{path.name} in the data folder; fitdata makes a new one.") from None
-        raise FitdataError(f"fitdata could not open its lock file .state/{path.name} ({e.strerror}), so it "
-                           "did not start.", hint="Check that the data folder belongs to you.") from None
+        log.warning("Could not create the lock file .state/%s (%s). fitdata sql still works, but where the "
+                    "data folder is read-only it then runs without it.", path.name, e.strerror)
+        return False
+    os.close(fd)
+    return True
+
+
+@contextmanager
+def hold_lock(path, busy: str = "Another fitdata sync is running on this archive, so this one did not start.",
+              hint: str = "Nothing to do: the next run picks up where that one ends.",
+              read_only_ok: bool = False, unlocked_note: str | None = None):
+    """An exclusive, non-blocking lock on a file in .state/ (owner-only). The lock file is opened
+    without following a link and is never truncated. Busy: Temporary (exit 75).
+
+    read_only_ok (for commands that only read): where the data folder cannot be written, an existing
+    lock file is opened read-only, and without one the command runs unlocked, saying so on stderr
+    (unlocked_note)."""
+    fd = _open_lock(path, read_only_ok)
+    if fd is None:
+        import sys
+        print(unlocked_note or f"Note: fitdata could not create its lock file .state/{path.name} because "
+              "the data folder is read-only here, so this command runs without it.", file=sys.stderr)
+        yield
+        return
     try:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)

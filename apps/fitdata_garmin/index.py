@@ -34,6 +34,7 @@ from typing import Any
 
 from . import paths, storage
 from .errors import FitdataError, Temporary
+from .safefs import make_lock_file
 
 log = logging.getLogger("fitdata")
 
@@ -252,6 +253,8 @@ def rebuild() -> None:
     statements = schema_statements()
     expected = expected_columns()
     (paths.DB.parent / (paths.DB.name + ".tmp")).unlink(missing_ok=True)  # left by an earlier fitdata
+    # The lock of `fitdata sql`, made here so that sql can take it where it may only read the data folder.
+    make_lock_file(paths.SQL_LOCK)
     try:
         _write(statements, expected, days, acts, files)
     except sqlite3.OperationalError as e:

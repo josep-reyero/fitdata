@@ -46,7 +46,8 @@ Guidelines:
 - **Exit codes:** 0 ok, 1 error, 2 usage (fix the command), 3 not found, 4 not allowed (your
   `MES_ALLOW` level is too low: ask the person), 5 refused for safety, 6 needs a person (with
   `--json`, stdout has a `needs_human` result: show its `action`, for example "run `fitdata
-  login`", then `rerun`), 75 temporary (Garmin rate limit or a sync running: try later).
+  login`", then `rerun`), 75 temporary (Garmin rate limit or a sync running: try later; a job
+  that ends with 75 did nothing wrong, and its next run carries on).
 - **Kinds:** query commands are `read`; `sync`, `backfill`, `index`, `migrate-storage` change
   data (`write`); `login` is `admin` and always needs the person at a terminal.
 - **Privacy:** never copy personal data into this repo, issues, or commits.

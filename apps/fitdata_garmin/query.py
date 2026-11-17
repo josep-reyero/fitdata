@@ -254,7 +254,8 @@ def sql(query: str, limit: int | None = SQL_DEFAULT_LIMIT, timeout_s: float = SQ
         raise BadInput("--limit must be 1 or more: it is the largest number of rows to show.")
     db = _db()
     try:
-        with hold_lock(paths.STATE / "sql.lock", busy=SQL_BUSY, hint=SQL_BUSY_HINT):
+        with hold_lock(paths.SQL_LOCK, busy=SQL_BUSY, hint=SQL_BUSY_HINT, read_only_ok=True,
+                       unlocked_note=SQL_UNLOCKED):
             return _sql(db, query, limit, timeout_s)
     finally:
         db.close()
@@ -262,9 +263,14 @@ def sql(query: str, limit: int | None = SQL_DEFAULT_LIMIT, timeout_s: float = SQ
 
 # One `fitdata sql` at a time per archive: each may use up to SQL_MAX_HEAP_BYTES of memory, so
 # many at once could still exhaust the machine. The lock lives in .state/, which no read command
-# can otherwise write.
+# can otherwise write. `index` creates it, so that where the data folder is read-only (the read
+# level of the mes gate binds it so) sql opens it read-only and still takes it; when it does not
+# exist there and cannot be made, sql runs without it and says so on stderr.
 SQL_BUSY = "Another fitdata sql query is running on this archive, so this one did not start."
 SQL_BUSY_HINT = f"Try again in a moment: a query runs for {SQL_TIMEOUT_S} seconds at most."
+SQL_UNLOCKED = ("Note: this query ran without the lock that keeps fitdata sql to one query at a time, "
+                "because the data folder is read-only here and has no lock file .state/sql.lock yet. "
+                "The next `fitdata index` (every sync runs one) creates it.")
 
 
 def _sql(db: sqlite3.Connection, query: str, limit: int | None, timeout_s: float) -> list[dict[str, Any]]:

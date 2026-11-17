@@ -13,7 +13,7 @@ index is rebuilt from them at any time.
             derived/laps.csv, session.json
     <data_dir>/garmin/account/<source>.json   profile, devices, zones, gear, records (latest)
     <data_dir>/fitdata.sqlite                 index: days, activities, files
-    <data_dir>/.state/                        login token, sync state, lock (owner-only)
+    <data_dir>/.state/                        login token, sync state, locks (owner-only)
     <data_dir>/logs/fitdata.log
     <data_dir>/store/                         only with storage = "bucket" (see storage.py)
 
@@ -40,6 +40,7 @@ LOGS = ROOT / "logs"
 DB = ROOT / "fitdata.sqlite"
 TOKENS = STATE / "garmin-tokens.json"
 LOCK = STATE / "sync.lock"
+SQL_LOCK = STATE / "sql.lock"   # one `fitdata sql` at a time; made by `index`
 
 
 DAYS_KEY = "garmin/days"

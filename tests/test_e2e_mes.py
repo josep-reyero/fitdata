@@ -44,8 +44,12 @@ def project(tmp_path_factory):
         pytest.skip("uv is not installed")
     base = tmp_path_factory.mktemp("fitdata-e2e")
     root = base / "fitdata"
+    # symlinks=True: a link in the repository stays a link in the copy, and the check below fails on
+    # it (mes deploy refuses a project with links), so nothing is left out to hide one.
     shutil.copytree(REPO, root, symlinks=True, ignore=shutil.ignore_patterns(
-        ".venv", ".git", "__pycache__", "apps.lock.json", ".pytest_cache", "CLAUDE.md"))
+        ".venv", ".git", "__pycache__", "apps.lock.json", ".pytest_cache", ".ruff_cache"))
+    links = [str(p.relative_to(root)) for p in root.rglob("*") if p.is_symlink()]
+    assert links == [], f"links in the project (mes deploy refuses them): {links}"
     home = base / "home"
     home.mkdir()
     env = {k: v for k, v in os.environ.items()

@@ -120,6 +120,9 @@ With a remote set, every command runs on that host (including `login` and `sync`
 
 ### Limiting what an SSH key may do
 
+This is the standalone way. Under my-easy-software, agents use mes's gate instead (see [Running
+under my-easy-software on a server](#running-under-my-easy-software-on-a-server)).
+
 `MES_ALLOW` is only as strong as what sets it. A key that reaches the archive machine with a plain
 SSH login can run anything, as you. For a key used by an agent or another machine, let the
 archive machine set the level: install the gate next to fitdata there,
@@ -181,8 +184,10 @@ systemctl --user enable --now fitdata-activities.timer fitdata-daily.timer fitda
 loginctl enable-linger "$USER"     # keep timers running while logged out
 ```
 
-Use one or the other, not both. A run that finds another sync running, or Garmin limiting
-requests, exits 75 (temporary); the units count that as success and the next run carries on.
+Use one or the other, never both (see [Running under my-easy-software on a
+server](#running-under-my-easy-software-on-a-server)). A run that finds another sync running, or
+Garmin limiting requests, exits 75 (temporary). The units count that as success, and the next run
+carries on.
 Each unit has the same limits as its `mes` job (`MemoryMax=512M`, `TimeoutStartSec` 20 minutes,
 30 minutes and 3 hours), cannot gain privileges (`NoNewPrivileges=yes`) and creates owner-only
 files (`UMask=0077`). After copying changed units, run `systemctl --user daemon-reload` again.
@@ -208,7 +213,10 @@ fitdata status      # archive overview: days, activities, last sync, login, stor
 `fitdata sql` runs one read-only `SELECT` on the index (`days`, `activities`, `garmin_files`). It returns at
 most 1000 rows unless you pass `--limit N`, and says on stderr when there are more; a query may
 run for 30 seconds at most, in memory only, and one at a time per archive (a second one meanwhile
-exits 75: try again in a moment).
+exits 75: try again in a moment). Read commands never write to the data folder, so they also work
+where it is read-only (as mes's gate gives it to read requests). There, `sql` takes its lock file
+`.state/sql.lock` read-only. `fitdata index` (and so every sync) creates that file. If it does not
+exist yet, the query runs without the lock and says so on stderr.
 
 The archive is read without ever following a link: a symbolic or hard link inside
 `<data_dir>/garmin/` (for example after restoring a backup) is skipped and named in a warning,
@@ -286,6 +294,96 @@ data_dir = "~/fitness/data"     # the same folder as fitdata's data_dir
 ```
 
 No symbolic links are needed. `fitdata status` prints the exact lines for this machine.
+
+## Running under my-easy-software on a server
+
+On a server set up with `mes server plan` (`mes guide server`), the project runs as its own
+account, `mes-fitdata`, and keeps its data in `/var/lib/mes/fitdata/data` (the data folder). The
+jobs are system units (`mes-fitdata.job.fitdata-garmin.<job>`), and agents reach the project
+through mes's gate. Everything below is for `storage = "files"`, the default. A bucket archive
+goes back to plain files first (`fitdata migrate-storage --to files`).
+
+**Only one of the two ways at a time.** The old user timers (`fitdata-*.timer`) and the new units
+must never both run. Both would sync with the same saved Garmin login, and their locks live in
+different folders, so neither would see the other. Turn the old ones off first, and stop the new
+job timers while you move the data:
+
+```sh
+systemctl --user disable --now fitdata-activities.timer fitdata-daily.timer fitdata-backfill.timer
+systemctl --user list-timers 'fitdata-*'                       # lists nothing
+sudo systemctl stop 'mes-fitdata.job.fitdata-garmin.*.timer'
+```
+
+**Moving an existing archive in.** Copy the archive (`garmin/`) and the saved login (`.state/`)
+as the project's account, never as root. Leave out the old index (`fitdata.sqlite`), the lock
+files and the logs. Do not copy the old index: the new jobs build their own from the files.
+Your account reads the old folder, and `mes-fitdata` writes the new one:
+
+```sh
+tar -C <old data_dir> --exclude='*.lock' --exclude='*.tmp' --hard-dereference -cf - garmin .state \
+  | sudo -u mes-fitdata sh -c 'umask 077 && exec tar -C /var/lib/mes/fitdata/data --no-same-owner --no-same-permissions -xf -'
+```
+
+Then check. Each of the first three commands prints nothing, and the `stat` line shows
+`mes-fitdata 700` and `mes-fitdata 600`:
+
+```sh
+sudo -u mes-fitdata find /var/lib/mes/fitdata/data ! -user mes-fitdata          # all the account's
+sudo -u mes-fitdata find /var/lib/mes/fitdata/data -perm /077                    # all owner-only
+sudo -u mes-fitdata find /var/lib/mes/fitdata/data -type l -o -type f -links +1  # no links
+sudo -u mes-fitdata stat -c '%U %a %n' /var/lib/mes/fitdata/data/.state /var/lib/mes/fitdata/data/.state/garmin-tokens.json
+mes server check fitdata --project-dir <clone>
+```
+
+A link that `find` names was in the old folder. Remove it (fitdata would skip it anyway). Then
+start the timers again: `sudo systemctl start 'mes-fitdata.job.fitdata-garmin.*.timer'`. The
+first job builds the index. Once the new jobs are working, delete the saved login from the old
+folder (`rm <old data_dir>/.state/garmin-tokens.json`), so only one copy of it exists.
+
+**`fitdata login` on the server.** Signing in needs a person at a terminal (email, password, 2FA
+code), so neither a job nor the gate ever runs it (it is an `admin` command). A job that finds no
+saved login, or a damaged one, exits 6. The owner runs the login once, with sudo, as the project's
+account, in a short-lived sandboxed unit. Run it again only when a job reports exit 6:
+
+```sh
+sudo systemd-run --pty --wait --collect --uid=mes-fitdata --gid=mes-fitdata \
+    --working-directory=/var/lib/mes/fitdata/code/current/project \
+    -p UMask=0077 -p NoNewPrivileges=yes -p CapabilityBoundingSet= -p ProtectSystem=strict \
+    -p ProtectHome=yes -p PrivateTmp=yes -p ReadWritePaths=/var/lib/mes/fitdata/data \
+    -E MES_PROJECT=fitdata -E MES_DATA_DIR=/var/lib/mes/fitdata/data -E HOME=/var/lib/mes/fitdata/state \
+    -E FITDATA_CONFIG=/nonexistent -E FITDATA_REMOTE= -E LANG=C.UTF-8 -E PYTHONDONTWRITEBYTECODE=1 \
+    /var/lib/mes/fitdata/code/current/project/.venv/bin/fitdata-garmin --local login
+```
+
+The unit can write only the data folder, and the login is saved in its `.state/`, owner-only. It
+can reach the network (Garmin's sign-in pages), but nothing else of the system.
+
+**Agents use mes's gate, not fitdata's remote mode.** `[remote]` in fitdata's config and
+`scripts/fitdata-ssh-gate` (above, "Limiting what an SSH key may do") are the standalone way.
+They are not used with mes. Under mes, an agent gets its own read or write key (`--key
+read=agent-read.pub` in `mes server plan`) and sends requests through the gate
+(`mes guide gate`), for example:
+
+```sh
+ssh mes-fitdata@my-server.example.ts.net '["fitdata", "garmin", "days", "--days", "7", "--json"]'
+```
+
+After the move, remove the old setup. Delete the `fitdata-ssh-gate` lines from your own account's
+`~/.ssh/authorized_keys` on the server, and the `~/.local/bin/fitdata-ssh-gate` link. Delete the
+`[remote]` section from `~/.config/fitdata/config.toml` on every other machine. Otherwise those
+machines keep reading the old folder through your account.
+
+**Exit 75 from a job** means temporary: another sync was running, or Garmin was limiting
+requests or could not be reached. Nothing is wrong, and the next run carries on. mes's job units
+may still list such a run as failed for now.
+
+**Backups.** `mes backup` (`sudo -u mes-fitdata mes backup fitdata --server-root /var/lib/mes`)
+copies the whole data folder, and that includes the saved Garmin login
+(`.state/garmin-tokens.json`). mes has no setting yet to leave a file out. Treat every backup as
+holding your Garmin sign-in: keep it private (the archive is made mode 0600), and only on disks
+you trust (encrypted if it leaves home). If a backup may have been seen by someone else, change
+your Garmin password and run `fitdata login` again (above). After a restore, run `fitdata login`
+again if the jobs exit 6.
 
 ## Storage
 

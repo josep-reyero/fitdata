@@ -142,3 +142,27 @@ def test_app_ui_table():
         assert (APP_DIR / c["sections"]).is_file()
         assert c["sections"] not in {f"dashboards/{s}.yaml" for s in ui["dashboards"]}
     assert set(ui.get("tables", [])) <= set(APP["data"]["tables"])
+
+
+def _tracked() -> list[str]:
+    import shutil
+    import subprocess
+    if shutil.which("git") is None or not (REPO / ".git").exists():
+        pytest.skip("not a git checkout")
+    out = subprocess.run(["git", "-C", str(REPO), "ls-files", "-s", "-z"], capture_output=True, check=True).stdout
+    return [e.decode("utf-8", "surrogateescape") for e in out.split(b"\0") if e]
+
+
+def test_no_links_are_committed():
+    """`mes deploy` refuses a project with any link in it (link_in_project): git mode 120000."""
+    entries = _tracked()
+    assert entries
+    links = [e.split("\t", 1)[1] for e in entries if e.startswith("120000 ")]
+    assert links == [], f"links in git (mes deploy refuses them): {links}"
+    on_disk = [n for n in (e.split("\t", 1)[1] for e in entries) if (REPO / n).is_symlink()]
+    assert on_disk == [], f"tracked files that are links on disk: {on_disk}"
+
+
+def test_claude_md_imports_agents_md():
+    text = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "@AGENTS.md" in text.splitlines()
