@@ -328,7 +328,10 @@ that finds no saved login, or a damaged one, exits 6. The owner runs the login o
 the project's account, in a short-lived sandboxed unit. Run it again only when a job reports exit 6:
 
 ```sh
-cd / && /usr/local/bin/mes server run-as fitdata --project-dir <clone> -- fitdata-garmin --local login
+cd / && /usr/local/bin/mes server run-as fitdata --project-dir <clone> \
+    --network sso.garmin.com --network connectapi.garmin.com --network connect.garmin.com \
+    --network diauth.garmin.com --network mobile.integration.garmin.com \
+    -- fitdata-garmin --local login
 ```
 
 That prints one `sudo systemd-run --pty ...` command and runs nothing itself. Read it, then run it
