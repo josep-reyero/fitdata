@@ -164,8 +164,7 @@ VENV_BIN = REPO / ".venv" / "bin"
 @pytest.mark.parametrize("names", [("fitdata",), ("fitdata", "fitdata-garmin")])
 def test_the_gate_through_the_installed_programs(tmp_path, archive, names):
     """End to end with the programs `uv sync` installs, linked next to the gate as the README says:
-    an older install with only `fitdata` (the project command, which hands the request to
-    fitdata-garmin) and today's with both. Read stays read; nothing extra reaches stdout."""
+    only `fitdata` (the project command, which hands the request to fitdata-garmin), and both. Read stays read; nothing extra reaches stdout."""
     if not all((VENV_BIN / n).exists() for n in ("fitdata", "fitdata-garmin")):
         pytest.skip("the project's .venv has no fitdata programs (run: uv sync)")
     folder = tmp_path / "gatebin"

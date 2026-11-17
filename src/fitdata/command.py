@@ -13,7 +13,7 @@ of the project command of the apps contract (section 5), with the standard libra
     fitdata <command> ...           while the project has exactly one app, the same as
                                     `fitdata <that app> <command> ...`, with a one-line note on
                                     stderr at most once per terminal session (none with --json,
-                                    -h or --help): `fitdata sync --days 3` still works
+                                    -h or --help), so `fitdata sync --days 3` works too
 
 The app's program gets MES_COMMAND_NAME="fitdata <short>" so that its usage lines and hints say
 `fitdata garmin ...`. While there is one app, `fitdata --help` also lists that app's commands and
@@ -192,20 +192,20 @@ def find_root() -> Path:
 
 def _project_table(data: dict, path: Path) -> tuple[str, str, str, list[str]]:
     if isinstance(data.get("apps"), dict):
-        raise Problem("project.toml still has the old [apps.<name>] section. Apps are now Python packages, each with "
-                      "its own app.toml, and the project lists them under [project] apps. The project cannot be "
-                      "used until this is changed.",
+        raise Problem("project.toml has an [apps.<name>] section, which projects do not have: each app is a Python "
+                      "package with its own app.toml, and the project lists them under [project] apps. The project "
+                      "cannot be used until this is changed.",
                       hint='Move the app into apps/<package>/ with an app.toml (see: mes guide apps), write apps = '
                       '["<package>"] under [project], and remove [apps.<name>].', kind="config_invalid")
     if isinstance(data.get("jobs"), dict):
         name = next(iter(data["jobs"]), "<name>")
-        raise Problem(f"project.toml still has [jobs.{name}]. Jobs now belong to the app that runs them, in its "
-                      "app.toml, so they are no longer read here.",
+        raise Problem(f"project.toml has [jobs.{name}]. Jobs belong to the app that runs them, in its "
+                      "app.toml, so they are not read here.",
                       hint=f"Move the job to [jobs.{name}] in the app's app.toml and drop the app's name from its run "
                       "line. To change a schedule from the project, use [settings.<app>].", kind="config_invalid")
     if isinstance(data.get("ui"), dict) and "data" in data["ui"]:
         name = (data.get("project") or {}).get("name", "<project>")
-        raise Problem(f"[ui] data is no longer used: every project has one shared database, {name}.sqlite, in "
+        raise Problem(f"[ui] data is not a setting: every project has one shared database, {name}.sqlite, in "
                       "its data folder.", hint="Remove the data line from [ui].", kind="config_invalid")
     project = data.get("project")
     if not isinstance(project, dict):
@@ -417,7 +417,7 @@ def describe(project: Project, level: str) -> dict[str, Any]:
             "allowed": level, "json": JSON_NOTE, "exit_codes": dict(EXIT_CODES), "apps": apps,
             # Jobs are composed from the app.toml files by mes; this command does not import mes.
             "jobs": [],
-            # One app: its commands are the project's, where a reader of the old describe looks for them.
+            # One app: its commands are also the project's, at the top level.
             **({k: apps[0]["describe"][k] for k in ("commands", "global_options") if k in apps[0]["describe"]}
                if len(apps) == 1 else {})}
 

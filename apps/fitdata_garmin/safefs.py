@@ -164,7 +164,7 @@ class Tree:
         if create:
             raise LinkInArchive(key, why)
         if st is not None and stat.S_ISREG(st.st_mode) and st.st_nlink == 1:
-            return None  # an ordinary file where a folder was expected: nothing there, as before
+            return None  # an ordinary file where a folder was expected: nothing there
         if err in _LINK_ERRNOS or err == errno.ENOTDIR:
             report(key, why)
             return None
@@ -273,7 +273,7 @@ class Tree:
 
     def walk(self, key: str, valid=lambda name: True) -> list[tuple[str, int]]:
         """(key, size) of every usable file below key; folders and files with names that
-        `valid` refuses are left out, as before."""
+        `valid` refuses are left out."""
         fd = self._open_dir(self._split(key))
         if fd is None:
             return []

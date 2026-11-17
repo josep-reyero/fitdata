@@ -20,7 +20,7 @@ reaches every file name by name from the opened garmin/ folder and never follows
 single name that are not the saved login.
 
 The bucket backend needs the optional `mybucket` package (`fitdata[bucket]`); without it,
-storage = "files" works as before and storage = "bucket" says how to install it.
+storage = "files" works and storage = "bucket" says how to install it.
 """
 from __future__ import annotations
 

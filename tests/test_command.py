@@ -114,7 +114,7 @@ def test_no_note_when_asking_for_help(project, capsys, argv):
 
 
 def test_with_one_app_help_and_describe_carry_its_commands(project, capsys):
-    """Readers of the old `fitdata --help` and `fitdata --json describe` still find the commands."""
+    """With one app, `fitdata --help` and `fitdata --json describe` list its commands too."""
     assert command.main(["--help"]) == 0
     assert "fitdata garmin hello  says hello" in capsys.readouterr().out
     assert command.main(["--json", "describe"]) == 0
@@ -396,18 +396,18 @@ def test_large_files_are_not_read(project, capsys):
 
 @pytest.mark.parametrize("text, message", [
     ('[project]\nname = "fitdata"\napps = ["fitdata_garmin"]\n[apps.fitdata-garmin]\ncli = "x"\n',
-     "project.toml still has the old [apps.<name>] section."),
+     "project.toml has an [apps.<name>] section, which projects do not have"),
     ('[project]\nname = "fitdata"\napps = ["fitdata_garmin"]\n[jobs.daily]\nrun = "x"\n',
-     "project.toml still has [jobs.daily]. Jobs now belong to the app that runs them"),
+     "project.toml has [jobs.daily]. Jobs belong to the app that runs them"),
     ('[project]\nname = "fitdata"\napps = ["fitdata_garmin"]\n[ui]\ndata = "fitdata.sqlite"\n',
-     "[ui] data is no longer used: every project has one shared database, fitdata.sqlite, in its data folder."),
+     "[ui] data is not a setting: every project has one shared database, fitdata.sqlite, in its data folder."),
     ('[project]\nname = "fitdata"\n', "project.toml does not list its apps"),
     ('[project]\nname = "fitdata"\napps = ["Bad-Name"]\n', "[project] apps in project.toml must list"),
     ('[project]\nname = "fitdata"\napps = ["fitdata_garmin", "fitdata_garmin"]\n', "each once"),
     ('[project]\nname = "../x"\napps = ["fitdata_garmin"]\n', "is not a name fitdata can use"),
     ("[project\n", "is not valid TOML"),
 ])
-def test_old_or_broken_project_toml_is_refused_in_plain_words(project, capsys, text, message):
+def test_a_wrong_or_broken_project_toml_is_refused_in_plain_words(project, capsys, text, message):
     (project[0] / "project.toml").write_text(text)
     assert command.main(["status"]) == 1 and message in capsys.readouterr().err
 
@@ -496,7 +496,7 @@ def test_the_installed_fitdata_gives_the_same_answers_as_fitdata_garmin(archive,
 
 def test_remote_requests_go_through_both_project_commands(archive, tmp_path):
     """A laptop's `fitdata days` reaches the archive machine's `~/.local/bin/fitdata` (the default
-    [remote] command), which is now the project command there: the answer is the archive's, and
+    [remote] command), which is the project command there: the answer is the archive's, and
     the only note is the one the laptop prints for its own command line."""
     _installed()
     bin_ = tmp_path / "home" / ".local" / "bin"

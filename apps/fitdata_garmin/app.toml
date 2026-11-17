@@ -8,8 +8,8 @@ version = "0.1.0"
 command = "fitdata-garmin"         # its console script (pyproject.toml); not a mes.App
 
 [data]
-# Its files are under <data folder>/garmin/. Its saved login (.state/) and its log (logs/) stay at
-# the top of the data folder, where they have always been (a documented exception for this app).
+# Its files are under <data folder>/garmin/. Its saved login (.state/) and its log (logs/) are at
+# the top of the data folder (a documented exception for this app).
 folder = "garmin"
 writes = ["days", "activities"]    # its rows of the project's shared tables
 tables = ["garmin_files"]          # every stored file: path, kind, date, activity_id, bytes

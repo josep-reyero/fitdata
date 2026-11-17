@@ -1,7 +1,7 @@
 """The shared database's schema script, made from a project.toml exactly as `mes db schema --sql`
 makes it (apps contract, section 4.3). fitdata does not depend on mes, so the app ships a copy of
 this text (apps/fitdata_garmin/schema.sql); tests/test_schema.py checks the copy against this
-generator and, when the my-easy-software rework is installed, against mes itself.
+generator and, when my-easy-software is installed, against mes itself.
 
 To regenerate the copy after changing [tables] or [views] in project.toml, from the repository:
 

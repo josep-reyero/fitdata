@@ -143,10 +143,10 @@ def test_result_size_is_capped(archive, monkeypatch):
         query.sql(q)
 
 
-def test_the_old_files_table_points_to_its_new_name(run):
+def test_a_query_on_files_points_to_garmin_files(run):
     code, _, err = run("--json", "sql", "SELECT * FROM files LIMIT 2")
     assert code == 2
     e = json.loads(err.strip().splitlines()[-1])
-    assert "now called garmin_files" in e["error"] and "FROM garmin_files" in e["error"]
+    assert "no table files" in e["error"] and "FROM garmin_files" in e["error"]
     code, out, _ = run("--json", "sql", "SELECT count(*) AS n FROM garmin_files")
     assert code == 0 and json.loads(out)[0]["n"] > 0

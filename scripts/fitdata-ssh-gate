@@ -11,7 +11,7 @@
 # What the other machine's fitdata sends is always one line: `<its fitdata command>
 # --forwarded-argv <base64url>`. This gate accepts exactly that shape and nothing else, ignores the
 # first word (it never runs what the caller names), and starts the fitdata-garmin next to this
-# script (or, on an older install, the fitdata there) with MES_ALLOW set to the level above and
+# script (or, when only fitdata is there, that one) with MES_ALLOW set to the level above and
 # MES_VIA_GATE=1, in a clean environment.
 # Anything else (a shell, scp, another command, extra words, odd characters) is refused (exit 4).
 
@@ -53,8 +53,8 @@ case $0 in
     */*) here=${0%/*} ;;
     *) refuse "set it up with its full path in authorized_keys, for example command=\"/home/you/.local/bin/fitdata-ssh-gate read\"." 1 ;;
 esac
-# The program that reads the request: fitdata-garmin (the app whose request format this is), or, on
-# an install from before the project command existed, the fitdata next to this gate.
+# The program that reads the request: fitdata-garmin (the app whose request format this is), or,
+# when only fitdata is linked next to this gate, that one (the project command hands it on).
 if [ -x "$here/fitdata-garmin" ]; then
     program=$here/fitdata-garmin
 elif [ -x "$here/fitdata" ]; then

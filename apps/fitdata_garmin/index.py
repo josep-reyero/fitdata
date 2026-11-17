@@ -17,8 +17,8 @@ own rows, and does everything in one BEGIN IMMEDIATE transaction, so a reader se
 or the new one, never half of each, and the rows of other apps are never touched.
 
 The index is derived: the files under garmin/ are the source of truth and `fitdata index`
-rebuilds it at any time. An index made by an earlier fitdata (plain tables days, activities and
-files, all its own) is replaced the first time, automatically.
+rebuilds it at any time. A file whose tables do not match the project's schema (a plain table
+where the schema has the view days or activities) has those tables replaced by the schema's.
 
 The archive is read through storage.archive() (plain files or a bucket); paths in the index are
 the archive keys, which are the same as the files' paths relative to data_dir.
@@ -44,8 +44,6 @@ FILES_TABLE = "garmin_files"     # [data] tables in app.toml
 FILES_COLUMNS = ("path", "kind", "date", "activity_id", "bytes")
 SCHEMA_SQL = Path(__file__).with_name("schema.sql")
 BUSY_TIMEOUT_S = 60              # the contract asks for at least 30 seconds
-# The tables an index made before the shared database had: all fitdata's own and rebuildable.
-OLD_TABLES = ("days", "activities", "files")
 
 _FILES_DDL = (
     f'CREATE TABLE "{FILES_TABLE}" ("path" TEXT PRIMARY KEY, "kind" TEXT, "date" TEXT, '
@@ -169,7 +167,7 @@ def _collect() -> tuple[list[dict], list[dict], list[dict]]:
         if not _key_ok(row["date"]):
             skipped += 1
             continue
-        days[row["date"]] = row  # a date seen twice: the later folder wins, as before
+        days[row["date"]] = row  # a date seen twice: the later folder wins
 
     raw_fits: dict[str, list[str]] = {}
     for k in keys:
@@ -213,15 +211,16 @@ def connect() -> sqlite3.Connection:
     return db
 
 
-def _drop_old_index(db: sqlite3.Connection) -> list[str]:
-    """An index from before the shared database: its plain tables days, activities and files were
-    only ever fitdata's own, rebuildable from the files. They are dropped so the views can take
-    their names. Views of those names (the new layout) are left alone."""
-    kinds = dict(db.execute("SELECT name, type FROM sqlite_master WHERE name IN (?, ?, ?)", OLD_TABLES).fetchall())
-    old = [t for t in OLD_TABLES if kinds.get(t) == "table"]
-    for t in old:
+def _drop_tables_in_place_of_views(db: sqlite3.Connection) -> list[str]:
+    """A plain table named like one of the shared views (days, activities) does not match the
+    project's schema and would keep the view from being made. Everything in the index is rebuilt
+    from the files, so such a table is dropped; the views themselves are left alone."""
+    marks = ", ".join("?" * len(SHARED))
+    kinds = dict(db.execute(f"SELECT name, type FROM sqlite_master WHERE name IN ({marks})", SHARED).fetchall())
+    dropped = [t for t in SHARED if kinds.get(t) == "table"]
+    for t in dropped:
         db.execute(f'DROP TABLE "{t}"')
-    return old
+    return dropped
 
 
 def _check_columns(db: sqlite3.Connection, expected: dict[str, list[tuple]]) -> None:
@@ -252,7 +251,7 @@ def rebuild() -> None:
     days, acts, files = _collect()  # read everything before the write transaction starts
     statements = schema_statements()
     expected = expected_columns()
-    (paths.DB.parent / (paths.DB.name + ".tmp")).unlink(missing_ok=True)  # left by an earlier fitdata
+    (paths.DB.parent / (paths.DB.name + ".tmp")).unlink(missing_ok=True)  # a stray temporary file, never used
     # The lock of `fitdata sql`, made here so that sql can take it where it may only read the data folder.
     make_lock_file(paths.SQL_LOCK)
     try:
@@ -281,7 +280,7 @@ def _write(statements: list[str], expected: dict[str, list[tuple]], days: list[d
     try:
         db.execute("BEGIN IMMEDIATE")
         try:
-            old = _drop_old_index(db)
+            dropped = _drop_tables_in_place_of_views(db)
             for s in schema_to_run(db, statements):
                 db.execute(s)
             _check_columns(db, expected)
@@ -300,7 +299,6 @@ def _write(statements: list[str], expected: dict[str, list[tuple]], days: list[d
             raise
     finally:
         db.close()
-    if old:
-        log.info("index: replaced the index of an earlier fitdata (its tables %s) with the shared tables",
-                 ", ".join(old))
+    if dropped:
+        log.info("index: rebuilt the index: its tables did not match the project's schema (%s)", ", ".join(dropped))
     log.info("index: %d days, %d activities, %d files -> %s", len(days), len(acts), len(files), paths.DB.name)

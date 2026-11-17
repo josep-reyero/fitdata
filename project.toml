@@ -11,8 +11,9 @@ apps = ["fitdata_garmin"]          # package names; the order decides menus and 
 
 # The shared tables: every app that keeps days or activities writes rows into these, with the same
 # columns. Measurements are "number" (kept exactly as Garmin gave them: 144 stays 144, 144.5 stays
-# 144.5), as the index always kept them; "real" would turn every whole number into 144.0. Readers (dashboards, `fitdata sql`, agents) read the views "days" and "activities". After
-# changing a table here, regenerate apps/fitdata_garmin/schema.sql (README, "Working on the code").
+# 144.5); "real" would turn every whole number into 144.0. Readers (dashboards, `fitdata sql`,
+# agents) read the views "days" and "activities". After changing a table here, regenerate
+# apps/fitdata_garmin/schema.sql (apps/fitdata_garmin/AGENTS.md, "Working on the code").
 
 [tables.days]                      # one row per archived day
 key = ["date"]

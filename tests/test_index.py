@@ -1,5 +1,5 @@
 """The index in the project's shared database (apps contract, sections 4.4 and 8.4): fitdata-garmin
-writes only its own rows, in one transaction, replaces an old-format index by itself once, and
+writes only its own rows, in one transaction, replaces tables that do not match the schema, and
 never touches what other apps keep in the same file."""
 from __future__ import annotations
 
@@ -92,39 +92,37 @@ def test_missing_views_are_made_from_schema_sql(archive):
         assert db.execute("SELECT count(*) FROM days").fetchone()[0] == 1
 
 
-def _old_index(path):
-    """The index an earlier fitdata made: plain, untyped tables, all its own."""
+def _mismatched_index(path):
+    """A file whose days and activities are plain, untyped tables instead of the schema's views."""
     with sqlite3.connect(path) as db:
-        db.execute('CREATE TABLE "days" ("date" PRIMARY KEY, "has_data", "steps", "old_extra")')
+        db.execute('CREATE TABLE "days" ("date" PRIMARY KEY, "has_data", "steps", "extra")')
         db.execute("INSERT INTO days VALUES ('2000-01-01', 1, 5, 'x')")
         db.execute('CREATE TABLE "activities" ("id" PRIMARY KEY, "date", "type")')
         db.execute("CREATE INDEX act_date ON activities(date)")
-        db.execute('CREATE TABLE "files" ("path" PRIMARY KEY, "kind", "date", "activity_id", "bytes")')
-        db.execute("CREATE INDEX files_date ON files(date)")
 
 
-def test_an_old_index_is_replaced_once_and_safely(archive):
+def test_tables_that_do_not_match_the_schema_are_replaced_once_and_safely(archive):
     paths.DB.unlink()
-    _old_index(paths.DB)
+    _mismatched_index(paths.DB)
     with _db() as db:
-        db.execute("CREATE TABLE other_notes (x)")  # not one of the old index's tables: kept
+        db.execute("CREATE TABLE other_notes (x)")  # not a name the schema uses: kept
     index.rebuild()
     objects = _objects()
-    assert objects["days"] == "view" and objects["activities"] == "view" and "files" not in objects
-    assert "act_date" not in objects and "files_date" not in objects and objects["other_notes"] == "table"
+    assert objects["days"] == "view" and objects["activities"] == "view"
+    assert "act_date" not in objects and objects["other_notes"] == "table"
     assert [d["date"] for d in query.days(DAY, DAY)] == [DAY]  # rebuilt from the files
-    assert query.sql("SELECT count(*) AS n FROM days") == [{"n": 1}]  # the old row is gone
-    index.rebuild()  # the second time there is nothing old left
+    assert query.sql("SELECT count(*) AS n FROM days") == [{"n": 1}]  # the mismatched row is gone
+    index.rebuild()  # the second time there is nothing left to replace
     assert _objects() == objects
 
 
-def test_an_old_index_is_replaced_by_the_first_job(archive, cli_run, monkeypatch):
-    """The first `fitdata-garmin index` (every job ends with one) after the update."""
+def test_a_mismatched_index_is_rebuilt_by_the_next_job(archive, cli_run, monkeypatch):
+    """`fitdata-garmin index` (every job ends with one) rebuilds it and says why."""
     paths.DB.unlink()
-    _old_index(paths.DB)
+    _mismatched_index(paths.DB)
     code, out, err = cli_run("--local", "index")
     assert code == 0, err
-    assert "replaced the index of an earlier fitdata" in err
+    assert "rebuilt the index: its tables did not match the project's schema" in err
     code, out, _ = cli_run("--json", "days", "--from", DAY, "--to", DAY)
     assert code == 0 and [d["date"] for d in json.loads(out)] == [DAY]
 
@@ -248,7 +246,7 @@ def test_schema_mismatch_is_a_fitdata_error():
 
 
 def test_numbers_keep_the_form_garmin_gave_them(run):
-    """The old index kept every value as written (its columns had no type). Whole numbers must
+    """Every value comes back as Garmin wrote it. Whole numbers must
     not come back as 144.0 and decimals must stay decimals, in days, activities and summary."""
     ddir = paths.day_dir(DAY)
     m = json.loads((ddir / "day.json").read_text())

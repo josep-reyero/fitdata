@@ -1,7 +1,7 @@
 # Fitness dashboards
 
-Web dashboards for the fitdata index, shown by
-my-easy-ui (the `easy-ui` command). Each dashboard is one YAML file. It lists
+Web dashboards for the **fitdata** index, shown by
+**my-easy-ui** (the `easy-ui` command). Each dashboard is one YAML file. It lists
 named read-only SQL queries and a layout of fixed components. There is no JavaScript, HTML or
 CSS here, so you or your assistant can rewrite a dashboard without risk.
 
@@ -64,7 +64,7 @@ easy-ui serve           # http://127.0.0.1:8765, until you press Ctrl-C
 
 ## Use it with your own data
 
-fitdata keeps its archive where its own config says: `data_dir` in
+**fitdata** keeps its archive where its own config says: `data_dir` in
 `~/.config/fitdata/config.toml` (by default `~/.local/share/fitdata`). That stays the one place
 the location is decided. Tell mes and easy-ui about the same folder with one table in
 `~/.config/mes/config.toml` (or `$MES_CONFIG`):
@@ -74,16 +74,16 @@ the location is decided. Tell mes and easy-ui about the same folder with one tab
 data_dir = "~/fitness/data"     # exactly fitdata's data_dir
 ```
 
-`fitdata status` prints these lines with this machine's folder filled in. easy-ui then reads the
+`fitdata garmin status` prints these lines with this machine's folder filled in. easy-ui then reads the
 index at `<data_dir>/fitdata.sqlite` (every project's shared database is `<project>.sqlite` in its
 data folder). No symbolic link is needed, and nothing is moved. Without the table, easy-ui looks in the mes default,
-`~/.local/share/mes/fitdata/`, which is not where fitdata writes.
+`~/.local/share/mes/fitdata/`, which is not where **fitdata** writes.
 
-The index is the same whether fitdata stores its files as plain files or in a bucket
-(`storage` in fitdata's config), so the dashboards do not change with it.
+The index is the same whether **fitdata** stores its files as plain files or in a bucket
+(`storage` in **fitdata**'s config), so the dashboards do not change with it.
 
-easy-ui only reads the index; it never changes your archive. Every `fitdata sync` (and
-`fitdata index`) rebuilds the index, so run `easy-ui data build` after it to show the new data.
+easy-ui only reads the index; it never changes your archive. Every `fitdata garmin sync` (and
+`fitdata garmin index`) rebuilds the index, so run `easy-ui data build` after it to show the new data.
 If nothing changed, the build keeps the current data and open pages do not reload. Run as a mes
 project, this happens by itself: `[ui] refresh_after` lists the three jobs
 (`fitdata-garmin.activities`, `.daily`, `.backfill`), so mes rebuilds the dashboard data after each
@@ -127,12 +127,12 @@ uv run python ui/fixtures/make_fixture.py
 The file ends in `.db` because `.gitignore` refuses every `*.sqlite`, so a real index is never
 committed by mistake. Never put a real index in `fixtures/`.
 
-The tests check the sample against fitdata, put the pages together the way easy-ui does and run
-every query on the sample (`uv run python -m pytest tests/test_dashboards.py`). With my-easy-ui
+The tests check the sample against **fitdata**, put the pages together the way easy-ui does and run
+every query on the sample (`uv run python -m pytest tests/test_dashboards.py`). With **my-easy-ui**
 added, they also run `easy-ui compose`, `data build` and `validate`:
 
 ```sh
 uv run --with-editable <path to my-easy-ui> python -m pytest tests/test_dashboards.py
 ```
 
-Without my-easy-ui installed (or with one from before it composed pages), those three are skipped.
+Without **my-easy-ui** installed (or with one that does not compose pages), those three are skipped.

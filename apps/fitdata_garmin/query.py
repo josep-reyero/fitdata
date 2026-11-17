@@ -309,8 +309,8 @@ def _sql(db: sqlite3.Connection, query: str, limit: int | None, timeout_s: float
             if not _has_index(db):
                 raise NotFound(NO_INDEX, hint=NO_INDEX_HINT) from None
             if re.search(r"no such table: (?:main\.)?files\b", msg):
-                raise BadInput("The table files is now called garmin_files (it belongs to the Garmin app of "
-                               "this project), so that query found no table files. Change FROM files to FROM "
+                raise BadInput("The index has no table files: the list of stored files is garmin_files (it "
+                               "belongs to the Garmin app of this project). Change FROM files to FROM "
                                "garmin_files and run it again.") from None
         if "interrupted" in msg:
             raise BadInput(f"That query was still running after {timeout_s:g} seconds, so fitdata "

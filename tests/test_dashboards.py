@@ -7,7 +7,7 @@ project's shared views, days and activities.
 
 Most tests need only fitdata: they compose the dashboards as the apps contract says
 (tests/compose_dashboards.py) and run every query on the sample with SQLite. The last ones need
-a my-easy-ui that composes dashboards (the apps rework) and are skipped otherwise. To run
+a my-easy-ui that composes dashboards and are skipped otherwise. To run
 everything:
 
     uv run --with-editable <path to my-easy-ui> python -m pytest tests/test_dashboards.py
@@ -350,7 +350,7 @@ def test_health_changes_say_which_way_is_good():
     assert rhr["better"] == "lower"
 
 
-# ------------------------------------------------------------------ with my-easy-ui (the apps rework)
+# ------------------------------------------------------------------ with my-easy-ui
 
 
 @pytest.fixture

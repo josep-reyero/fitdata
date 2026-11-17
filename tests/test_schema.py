@@ -1,7 +1,7 @@
 """apps/fitdata_garmin/schema.sql is the exact script `mes db schema --sql` prints for this
 project.toml (apps contract, section 4.3). fitdata does not depend on mes, so the copy is checked
 against tests/schema_script.py (which reproduces the contract's own fitlab example to the byte)
-and, when the my-easy-software rework is available, against mes itself."""
+and, when my-easy-software is available, against mes itself."""
 from __future__ import annotations
 
 import os
@@ -130,7 +130,7 @@ def test_project_toml_columns_are_the_indexers():
 
 
 def _mes() -> list[str] | None:
-    """How to run the my-easy-software rework's mes: MES_REWORK_DIR (its checkout), else `mes`."""
+    """How to run mes: MES_REWORK_DIR (a my-easy-software checkout), else `mes`."""
     rework = os.environ.get("MES_REWORK_DIR")
     if rework and shutil.which("uv"):
         return ["uv", "run", "--quiet", "--project", rework, "mes"]

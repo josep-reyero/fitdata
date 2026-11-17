@@ -1,5 +1,5 @@
 """Regression tests for the security audit (B3 to B10). Each one reproduces the attack or the
-failure first, then checks that it no longer works. Nothing here talks to Garmin or ssh."""
+failure first, then checks that it is stopped. Nothing here talks to Garmin or ssh."""
 from __future__ import annotations
 
 import fcntl

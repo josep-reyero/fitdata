@@ -244,7 +244,7 @@ def test_garmin_rate_limit_after_retries_becomes_rate_limited(monkeypatch):
         raise GarminConnectTooManyRequestsError("429")
     with pytest.raises(client.RateLimited):
         s.call(limited)
-    assert s.calls == 4  # the first try and three waits, as before
+    assert s.calls == 4  # the first try and three waits
 
 
 def test_errors_carry_their_exit_code(run, archive):
