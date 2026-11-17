@@ -328,14 +328,11 @@ that finds no saved login, or a damaged one, exits 6. The owner runs the login o
 the project's account, in a short-lived sandboxed unit. Run it again only when a job reports exit 6:
 
 ```sh
-sudo systemd-run --pty --wait --collect --uid=mes-fitdata --gid=mes-fitdata \
-    --working-directory=/var/lib/mes/fitdata/code/current/project \
-    -p UMask=0077 -p NoNewPrivileges=yes -p CapabilityBoundingSet= -p ProtectSystem=strict \
-    -p ProtectHome=yes -p PrivateTmp=yes -p ReadWritePaths=/var/lib/mes/fitdata/data \
-    -E MES_PROJECT=fitdata -E MES_DATA_DIR=/var/lib/mes/fitdata/data -E HOME=/var/lib/mes/fitdata/state \
-    -E FITDATA_CONFIG=/nonexistent -E FITDATA_REMOTE= -E LANG=C.UTF-8 -E PYTHONDONTWRITEBYTECODE=1 \
-    /var/lib/mes/fitdata/code/current/project/.venv/bin/fitdata-garmin --local login
+cd / && /usr/local/bin/mes server run-as fitdata --project-dir <clone> -- fitdata-garmin --local login
 ```
+
+That prints one `sudo systemd-run --pty ...` command and runs nothing itself. Read it, then run it
+in a terminal on the server.
 
 The unit can write only the data folder, and the login is saved in its `.state/`, owner-only. It
 can reach the network (Garmin's sign-in pages), but nothing else of the system.
@@ -357,16 +354,13 @@ lines from your own account's `~/.ssh/authorized_keys` on the server, and the
 standalone folder through your account.
 
 **Exit 75 from a job** means temporary: another sync was running, or Garmin was limiting
-requests or could not be reached. Nothing is wrong, and the next run carries on. mes's job units
-may list such a run as failed.
+requests or could not be reached. Nothing is wrong, and the next run carries on. mes records
+such a run as skipped.
 
-**Backups.** `mes backup` (`sudo -u mes-fitdata mes backup fitdata --server-root /var/lib/mes`)
-copies the whole data folder, and that includes the saved Garmin login
-(`.state/garmin-tokens.json`). mes has no setting to leave a file out. Treat every backup as
-holding your Garmin sign-in: keep it private (the archive is made mode 0600), and only on disks
-you trust (encrypted if it leaves home). If a backup may have been seen by someone else, change
-your Garmin password and run the login again (above). After a restore, run the login again if
-the jobs exit 6.
+**Backups.** `mes backup` (`cd / && sudo -u mes-fitdata /usr/local/bin/mes backup fitdata --server-root /var/lib/mes`)
+copies the data folder but leaves the saved Garmin login (`.state/garmin-tokens.json`) out: the app
+lists it under `no_backup` in its `app.toml`. A restore keeps the login that is already on the
+server; after restoring onto an empty server, run the login again (above).
 
 ## Storage
 

@@ -11,6 +11,8 @@ command = "fitdata-garmin"         # its console script (pyproject.toml); not a 
 # Its files are under <data folder>/garmin/. Its saved login (.state/) and its log (logs/) are at
 # the top of the data folder (a documented exception for this app).
 folder = "garmin"
+# Never copied into backups: the saved Garmin login. After restoring a backup, log in again.
+no_backup = ["data/.state/garmin-tokens.json"]
 writes = ["days", "activities"]    # its rows of the project's shared tables
 tables = ["garmin_files"]          # every stored file: path, kind, date, activity_id, bytes
 rebuild = "index"                  # rebuilds all of the above from the files under garmin/

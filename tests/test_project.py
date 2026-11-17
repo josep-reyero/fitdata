@@ -69,7 +69,8 @@ def test_app_toml():
                           "command": "fitdata-garmin"}
     assert APP["app"]["name"] == describe.APP_NAME == index.APP
     assert APP["data"] == {"folder": "garmin", "writes": ["days", "activities"], "tables": ["garmin_files"],
-                           "rebuild": "index"}
+                           "rebuild": "index",
+        "no_backup": ["data/.state/garmin-tokens.json"]}
     assert describe.COMMAND_KINDS[APP["data"]["rebuild"]] == "write"
     assert tuple(APP["data"]["writes"]) == index.SHARED and APP["data"]["tables"] == [index.FILES_TABLE]
     assert set(APP["data"]["writes"]) <= set(PROJECT["tables"])
