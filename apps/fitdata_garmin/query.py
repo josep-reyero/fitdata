@@ -51,9 +51,9 @@ def _db() -> sqlite3.Connection:
 
 def readable() -> dict[str, str]:
     """What fitdata's queries may read, by name: the shared views (from schema.sql, in its order)
-    and fitdata-garmin's own table. Never the views' __rows tables directly."""
+    and fitdata-garmin's own tables. Never the views' __rows tables directly."""
     views = re.findall(r'^CREATE VIEW "([a-z][a-z0-9_]*)" AS$', index.SCHEMA_SQL.read_text(encoding="utf-8"), re.M)
-    return {**{v: "view" for v in views}, index.FILES_TABLE: "table"}
+    return {**{v: "view" for v in views}, **{t: "table" for t in index.APP_TABLES}}
 
 
 def _rows(sql: str, params: tuple = ()) -> list[dict[str, Any]]:
@@ -371,7 +371,11 @@ def schema() -> dict[str, Any]:
     return {"database": str(paths.DB), "tables": tables,
             "notes": "Read-only. days and activities are the project's shared views: one row per day and per "
                      "activity, from every app of the project (source says which); garmin_files lists "
-                     "fitdata-garmin's stored files. days.date and activities.date are local calendar dates "
+                     "fitdata-garmin's stored files; garmin_sleep, garmin_daily and garmin_training hold "
+                     "Garmin's daily detail (one row per date), garmin_body_battery_events what changed Body "
+                     "Battery, and garmin_samples (date, series, at, value) and garmin_sleep_stages the series "
+                     "through the day and the night for the most recent days only (intraday_days, default 60). "
+                     "Times are local, 'YYYY-MM-DD HH:MM'. days.date and activities.date are local calendar dates "
                      "(YYYY-MM-DD). Full detail lives in the JSON/FIT files: use `fitdata day DATE --source "
                      "NAME` and `fitdata activity ID --source NAME|--records`."}
 

@@ -2,42 +2,63 @@
 
 Web dashboards for the **fitdata** index, shown by
 **my-easy-ui** (the `easy-ui` command). Each dashboard is one YAML file. It lists
-named read-only SQL queries and a layout of fixed components. There is no JavaScript, HTML or
-CSS here, so you or your assistant can rewrite a dashboard without risk.
+named read-only SQL queries and a layout of fixed components. The look is `theme.yaml` and two
+small stylesheets in `styles/`; there is no JavaScript or HTML here, so you or your assistant can
+rewrite a dashboard without risk.
 
-| Page | File | What it shows |
+| Page | File | The question it answers |
 |---|---|---|
-| Today | `dashboards/overview.yaml` (the project's), with the sections of `../apps/fitdata_garmin/dashboards/overview-garmin.yaml` | Latest steps, resting heart rate, sleep score, overnight HRV, Body Battery high and Training Readiness, each next to the change against your average over the days before; trends for sleep score, resting heart rate, HRV and steps |
-| Sleep and recovery | `../apps/fitdata_garmin/dashboards/sleep.yaml` | Time asleep and sleep score, HRV, resting heart rate, the Body Battery range, and a table of the last nights |
-| Activities | `../apps/fitdata_garmin/dashboards/activities.yaml` | Count, distance, time and climbing for the period; distance and time per week by sport; recent activities with pace, heart rate and training effect |
-| Trends | `../apps/fitdata_garmin/dashboards/trends.yaml` | Weekly averages over the long run: recovery, sleep, steps, training time and load, VO2 max |
+| Today | `dashboards/overview.yaml` (the project's), with the sections of `../apps/fitdata_garmin/dashboards/overview-garmin.yaml` | How ready am I, how did I sleep, how is the day going? Readiness, sleep score, Body Battery, HRV, resting heart rate, stress, steps and intensity minutes against your usual; a table of 7- and 28-day averages; Body Battery, stress and heart rate through the day; the latest activities |
+| Sleep | `../apps/fitdata_garmin/dashboards/sleep.yaml` | How long and how well did I sleep? The night stage by stage, what made the score (Garmin's sub-scores and ideal ranges), heart rate, HRV, breathing, Body Battery and stress through the night; stages, score, time asleep against need, bed and wake times and night vitals per night |
+| Stress and energy | `../apps/fitdata_garmin/dashboards/stress.yaml` | How stressful was the day? Stress and Body Battery through the day, time in each stress level, what charged and drained the Body Battery; the levels, average stress and Body Battery day by day |
+| Heart and HRV | `../apps/fitdata_garmin/dashboards/heart.yaml` | Are my heart and HRV where they usually are? Heart rate through the day; resting heart rate with its 7- and 28-day lines; overnight HRV against Garmin's baseline; HRV through the night; the last two weeks |
+| Activity | `../apps/fitdata_garmin/dashboards/activity.yaml` | How much did I move? Steps against the goal through the day and per day, intensity minutes per week, floors, calories, active and sitting time |
+| Training | `../apps/fitdata_garmin/dashboards/training.yaml` | Am I ready to train, and is my load right? Readiness and its factors, load balance, acute load against the optimal range, VO2 max, endurance and hill scores, race predictions, hours per week by sport, the period's activities |
+| Body | `../apps/fitdata_garmin/dashboards/body.yaml` | Weight and body fat from weigh-ins, fitness age, water and heat acclimation; a chart with nothing logged is hidden |
+| Trends | `../apps/fitdata_garmin/dashboards/trends.yaml` | Any of 24 measures per week or month over a chosen range, with the lowest and highest day, next to a second measure |
 
-**Who owns which page.** Today belongs to the project: it holds the Days control and the latest
-day, and two anchors (`{anchor: readings}`, `{anchor: trends}`) where each app adds its own
+**Who owns which page.** Today belongs to the project: it holds the Day control and the day
+shown, and two anchors (`{anchor: readings}`, `{anchor: trends}`) where each app adds its own
 sections. fitdata-garmin adds the Garmin readings and charts there (its `[ui.contributes.overview]`
-in `app.toml`; the queries of a section are named after the app, `garmin_...`). Sleep, Activities
-and Trends come with fitdata-garmin (`[ui] dashboards` in its `app.toml`). `easy-ui compose`
-shows the pages as they are put together, and `easy-ui validate`, `preview` and `publish` put them
-together the same way. To change a page without editing the app, give the project its own copy:
+in `app.toml`; the queries of a section are named after the app, `garmin_...`). The other pages
+come with fitdata-garmin (`[ui] dashboards` in its `app.toml`). `easy-ui compose` shows the pages
+as they are put together, and `easy-ui validate`, `preview` and `publish` put them together the
+same way. To change a page without editing the app, give the project its own copy:
 `dashboards/<slug>.yaml` here replaces the app's page of that name, and
 `sections/fitdata-garmin.overview.yaml` (with `spec: easy-ui/sections-v1`) replaces what the app
 adds to Today (`sections: []` removes it).
 
-Every page has a **Days** control (7, 30, 90 or 365 days). The period ends on the most recent
-day the watch synced, not on the calendar date, so a late sync never shows an empty page.
+**Controls.** The day pages have a **Day** control (a date, today by default) and most have a
+**Period** (14 days to a year). A day that has not synced yet shows the most recent day with
+data, so a late sync never shows an empty page; a past day without data shows empty panels.
+Trends has its own controls: the measure, the one next to it, week or month, and the range.
 Days without a reading are left out of averages and show as gaps or dashes, never as zero.
 
-The dashboards read the project's shared views `days` and `activities` (one row per day and per
-activity, from every app of the project), so a second app's days and activities show up on these
-pages without changing them. Only those two views of the index are copied for the dashboards: the
-tables behind them (`days__rows`, `activities__rows`) and fitdata-garmin's `garmin_files` stay out.
+**Data.** The dashboards read the project's shared views `days` and `activities` (one row per
+day and per activity, from every app of the project), so a second app's days and activities show
+up on these pages without changing them, and fitdata-garmin's tables listed in its `[ui] tables`:
+`garmin_sleep`, `garmin_daily`, `garmin_training`, `garmin_body_battery_events`, `garmin_samples`
+(readings through the day and the night as `date`, `series`, `at` (local `HH:MM`), `value`) and
+`garmin_sleep_stages`. The tables behind the views (`days__rows`, `activities__rows`) and
+`garmin_files` stay out of the dashboard data.
+
+**Look.** `theme.yaml` sets warm paper and ink in light mode and a soft charcoal in dark mode,
+with the system's own fonts (nothing is downloaded). `styles/10-families.css` gives each family
+of measures one colour, the same on every page: sleep violet, stress amber, energy (Body Battery)
+teal, heart red, activity green, training blue, body brown. A component joins a family with its
+`class:` (`class: sleep`, `class: [energy, pair-energy-stress]`), which colours the dot before a
+reading's name, the short rule over a panel and its chart lines. `styles/20-look.css` sets the
+figures and the notes, and sets no widths: easy-ui lays the rows out for every screen, from a
+phone to a wide monitor. Group related readings in one row and let them wrap.
 
 ## Try it with the sample data
 
-`fixtures/fitdata-sample.db` is a small made-up index: 120 days and 34 activities with the same
-tables, views and columns as a real `fitdata.sqlite`. It includes the gaps a real archive has: days
-without the watch, a missing day, nights without sleep or HRV data and a sick week. None of it
-comes from a real watch. (It ends in `.db` because the repository's `.gitignore` keeps every
+`fixtures/fitdata-sample.db` is a small made-up index (about 2 MB): 120 days and 34 activities
+with the same tables, views and columns as a real `fitdata.sqlite`, made from a fake archive with
+the files Garmin gives (sleep, stress, Body Battery, HRV, readiness, training status, weigh-ins
+and the rest), and readings through the day and night for the last 7 days. It includes the gaps a
+real archive has: days without the watch, a missing day, nights without sleep or HRV data, nights
+without SpO2, a sick week, empty and broken files. None of it comes from a real watch. (It ends in `.db` because the repository's `.gitignore` keeps every
 `*.sqlite` file out of git; `easy-ui preview` reads `.sqlite`, `.sqlite3` and `.db` files in
 `ui/fixtures/`.)
 
@@ -105,6 +126,12 @@ Tips that keep the numbers honest:
   for steps and calories.
 - Use `nullif(steps, 0)` and `nullif(sleep_seconds, 0)` so a missing reading is not averaged as 0.
 - Sleep, HRV and Training Readiness for a night are stored on the morning's date.
+- Readings through the day (`garmin_samples`, `garmin_sleep_stages`) exist only for the most
+  recent `intraday_days` days (60 by default); older days have their daily numbers only. A query
+  over them for an older day returns nothing, and the panel says so.
+- The chosen day: `WITH sel AS (SELECT min(:day, (SELECT max(date) FROM days WHERE has_data = 1)) AS d)`
+  shows the latest day with data when the chosen one has not synced yet.
+- Leave the latest day (usually still in progress) out of averages of steps, calories and floors.
 - Sleep score, HRV status, Body Battery, Training Readiness, training effect, training load and
   VO2 max are Garmin's own calculations. Say so on the page.
 - Give a stat with a change `better: higher` or `better: lower` (resting heart rate: lower), so
@@ -113,16 +140,21 @@ Tips that keep the numbers honest:
 - The menu order is `[ui] dashboards` in `../project.toml`; the first one opens at the start.
 - Read `days` and `activities`, never `days__rows` or `activities__rows`: the views are what every
   app shares (`source` says which app a row came from).
+- Give every component the `class:` of its family so its colour matches the other pages.
 
 ## Sample data and tests
 
 The sample is made by `fixtures/make_fixture.py`. It writes a fake archive into a temporary folder
-and runs fitdata-garmin's own indexer on it (through `apps/fitdata_garmin/schema.sql`), so its
-tables, views and columns always match the real index:
+and runs fitdata-garmin's own indexer on it (`fitdata garmin index`, keeping 7 days of readings
+through the day, with the tables of `apps/fitdata_garmin/schema.sql`), so its tables, views and
+columns always match the real index:
 
 ```sh
 uv run python ui/fixtures/make_fixture.py
 ```
+
+`screenshots/` holds pictures of every page made from this sample (light and dark, wide and
+phone), shown in the project's README. Take new ones from the sample only, never from a real index.
 
 The file ends in `.db` because `.gitignore` refuses every `*.sqlite`, so a real index is never
 committed by mistake. Never put a real index in `fixtures/`.

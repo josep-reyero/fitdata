@@ -1,9 +1,10 @@
 """The fitness dashboards and their synthetic sample data (ui/fixtures/).
 
 The project's Today page is ui/dashboards/overview.yaml, with anchors where fitdata-garmin adds its
-sections (apps/fitdata_garmin/dashboards/overview-garmin.yaml); Sleep, Activities and Trends are
-fitdata-garmin's own dashboards (apps/fitdata_garmin/dashboards/). Every dashboard reads only the
-project's shared views, days and activities.
+sections (apps/fitdata_garmin/dashboards/overview-garmin.yaml); Sleep, Stress and energy, Heart and
+HRV, Activity, Training, Body and Trends are fitdata-garmin's own dashboards
+(apps/fitdata_garmin/dashboards/). The dashboards read the project's shared views, days and
+activities, and fitdata-garmin's garmin_* tables listed in its [ui] tables.
 
 Most tests need only fitdata: they compose the dashboards as the apps contract says
 (tests/compose_dashboards.py) and run every query on the sample with SQLite. The last ones need
@@ -34,9 +35,13 @@ from conftest import easyui_for_project
 REPO = Path(__file__).resolve().parents[1]
 FIXTURE = REPO / "ui" / "fixtures" / "fitdata-sample.db"
 MAKE_FIXTURE = REPO / "ui" / "fixtures" / "make_fixture.py"
-SLUGS = ("overview", "sleep", "activities", "trends")
-DAY_CHOICES = (7, 30, 90, 365)
+SLUGS = ("overview", "sleep", "stress", "heart", "activity", "training", "body", "trends")
 SHARED = ("days", "activities")
+GARMIN = ("garmin_sleep", "garmin_daily", "garmin_training", "garmin_body_battery_events", "garmin_samples",
+          "garmin_sleep_stages")
+LATEST = "2026-05-04"       # the sample's latest day
+NO_WATCH = "2026-02-13"     # a day the watch was not worn
+OLD_DAY = "2026-04-01"      # a day with daily numbers but before the window kept through the day
 
 
 def _rows(db: Path, sql: str, *args) -> list[tuple]:
@@ -78,13 +83,14 @@ def test_fixture_is_what_the_generator_and_the_real_indexer_make(tmp_path):
     out = tmp_path / "fresh.sqlite"
     subprocess.run([sys.executable, str(MAKE_FIXTURE), "--out", str(out)], check=True, capture_output=True)
     objects = "SELECT type, name FROM sqlite_master WHERE type IN ('table', 'view') ORDER BY type, name"
-    assert _rows(FIXTURE, objects) == [("table", "activities__rows"), ("table", "days__rows"), ("table", "garmin_files"),
+    assert _rows(FIXTURE, objects) == [("table", "activities__rows"), ("table", "days__rows"),
+                                       *[("table", t) for t in sorted((*GARMIN, "garmin_files"))],
                                        ("view", "activities"), ("view", "days")]
     assert _rows(FIXTURE, objects) == _rows(out, objects)
-    for t, order_by in (("days__rows", "date"), ("activities__rows", "id"), ("garmin_files", "path"),
-                        ("days", "date"), ("activities", "id")):
+    for (_, t) in _rows(FIXTURE, objects):
         assert _columns(FIXTURE, t) == _columns(out, t), f"columns of {t} differ: run ui/fixtures/make_fixture.py"
-        assert _rows(FIXTURE, f'SELECT * FROM "{t}" ORDER BY {order_by}') == _rows(out, f'SELECT * FROM "{t}" ORDER BY {order_by}'), (
+        everything = f'SELECT * FROM "{t}" ORDER BY ' + ", ".join(str(i + 1) for i in range(len(_columns(FIXTURE, t))))
+        assert _rows(FIXTURE, everything) == _rows(out, everything), (
             f"ui/fixtures/fitdata-sample.db is out of date ({t}): run uv run python ui/fixtures/make_fixture.py"
         )
     assert _rows(FIXTURE, "SELECT DISTINCT source FROM days__rows") == [("fitdata-garmin",)]
@@ -93,22 +99,29 @@ def test_fixture_is_what_the_generator_and_the_real_indexer_make(tmp_path):
 def test_fixture_has_realistic_gaps():
     one = lambda sql: _rows(FIXTURE, sql)[0][0]  # noqa: E731
     assert one("SELECT count(*) FROM days") == 119            # 120 days, one missing from the archive
-    assert one("SELECT min(date) || ' ' || max(date) FROM days") == "2026-01-05 2026-05-04"
+    assert one("SELECT min(date) || ' ' || max(date) FROM days") == f"2026-01-05 {LATEST}"
     assert 25 <= one("SELECT count(*) FROM activities") <= 40
     assert one("SELECT count(*) FROM days WHERE has_data = 0") == 3
     assert one("SELECT count(*) FROM days WHERE has_data = 1 AND sleep_score IS NULL") >= 3
     assert one("SELECT count(*) FROM days WHERE has_data = 1 AND hrv_last_night_avg IS NULL") >= 3
     assert one("SELECT count(*) FROM days WHERE has_data = 1 AND body_battery_high IS NULL") >= 1
+    assert one("SELECT count(*) FROM days WHERE has_data = 1 AND sleep_spo2_avg IS NULL") >= 10
     assert one("SELECT count(*) FROM activities WHERE avg_hr IS NULL") >= 1
     assert one("SELECT count(*) FROM activities WHERE distance_m = 0 OR distance_m IS NULL") >= 1
     assert one("SELECT count(*) FROM days WHERE complete = 0") == 2  # the last two days still settle
+    # Only the most recent days keep their readings through the day; weigh-ins and water are sparse.
+    assert one("SELECT count(DISTINCT date) FROM garmin_samples") == 7
+    assert one("SELECT count(DISTINCT date) FROM garmin_sleep_stages") <= 7
+    assert 20 <= one("SELECT count(*) FROM days WHERE weight_kg IS NOT NULL") < 60
+    assert 20 <= one("SELECT count(*) FROM days WHERE hydration_ml > 0") < 60
+    assert one("SELECT count(*) FROM garmin_sleep") < one("SELECT count(*) FROM days")
 
 
-def test_the_dashboards_may_read_only_the_shared_views():
+def test_the_dashboards_may_read_the_shared_views_and_the_apps_ui_tables():
     """The allowlist (contract 4.6): the shared views, then [views], then each app's [ui] tables."""
     project = tomllib.loads((REPO / "project.toml").read_text())
     allow = [*project["tables"], *project.get("views", {}), *[t for a in apps(REPO) for t in a["ui"].get("tables", [])]]
-    assert allow == list(SHARED) and "tables" not in project["ui"]
+    assert allow == [*SHARED, *GARMIN] and "tables" not in project["ui"]
 
 
 # ------------------------------------------------------------------ composition (fitdata only)
@@ -116,8 +129,7 @@ def test_the_dashboards_may_read_only_the_shared_views():
 
 def test_where_each_dashboard_comes_from_and_the_menu():
     found = sources(REPO)
-    assert {s: f for s, (f, _) in found.items()} == {
-        "sleep": "fitdata-garmin", "activities": "fitdata-garmin", "trends": "fitdata-garmin", "overview": "project"}
+    assert {s: f for s, (f, _) in found.items()} == {s: ("project" if s == "overview" else "fitdata-garmin") for s in SLUGS}
     assert order(REPO) == list(SLUGS)
 
 
@@ -128,25 +140,14 @@ def test_the_overview_is_todays_page_once_composed():
          "placed": "after:readings"},
         {"app": "fitdata-garmin", "id": "garmin-trends", "file": "apps/fitdata_garmin/dashboards/overview-garmin.yaml",
          "placed": "after:trends"}]
-    assert list(dash["queries"]) == ["last_day", "garmin_latest", "garmin_daily"]
+    assert list(dash["queries"]) == ["last_day", "garmin_today", "garmin_usual", "garmin_day_energy",
+                                     "garmin_day_heart", "garmin_last_activities"]
     assert not any(isinstance(r, dict) for r in dash["layout"])  # the anchors are gone
-    shape = [[c["type"] + ":" + str(c.get("title")) for c in row] for row in dash["layout"]]
-    assert shape == [
-        ["controls:None", "stat:Data up to"],
-        ["stat:Steps", "stat:Resting heart rate", "stat:Sleep score", "stat:Overnight HRV"],
-        ["stat:Body Battery high", "stat:Training readiness"],
-        ["line:Sleep score", "line:Resting heart rate"],
-        ["line:Overnight HRV", "bar:Steps per day"],
-        ["text:None"]]
+    shape = [[c["type"] for c in row] for row in dash["layout"]]
+    assert shape[:4] == [["controls"], ["stat", "stat"], ["stat"] * 5, ["stat"] * 5]
+    assert shape[4:] == [["table"], ["line", "line"], ["table"], ["text"]]
     queries = {c.get("query") for row in dash["layout"] for c in row} - {None}
     assert queries == set(dash["queries"])
-
-
-def test_the_project_overview_alone_shows_only_shared_data():
-    """Without the app's sections, the project's page still works: it reads only shared views."""
-    raw = compose_dashboards_raw("overview")
-    assert [r for r in raw["layout"] if isinstance(r, dict)] == [{"anchor": "readings"}, {"anchor": "trends"}]
-    assert list(raw["queries"]) == ["last_day"]
 
 
 def compose_dashboards_raw(slug: str) -> dict:
@@ -154,13 +155,22 @@ def compose_dashboards_raw(slug: str) -> dict:
     return yaml.safe_load(sources(REPO)[slug][1].read_text())
 
 
+def test_the_project_overview_alone_shows_only_shared_data():
+    """Without the app's sections, the project's page still works: it reads only shared views."""
+    raw = compose_dashboards_raw("overview")
+    assert [r for r in raw["layout"] if isinstance(r, dict)] == [{"anchor": "readings"}, {"anchor": "trends"}]
+    assert list(raw["queries"]) == ["last_day"]
+    words = set(re.findall(r"[a-z_]+", raw["queries"]["last_day"]["sql"].lower()))
+    assert not words & set(GARMIN)
+
+
 def test_a_project_override_removes_or_replaces_the_apps_sections(tmp_path):
     copy = tmp_path / "proj"
-    shutil.copytree(REPO, copy, ignore=shutil.ignore_patterns(".venv", ".git", "__pycache__", "*.db"))
+    shutil.copytree(REPO, copy, ignore=shutil.ignore_patterns(".venv", ".git", "__pycache__", "*.db", "screenshots"))
     (copy / "ui" / "sections").mkdir()
     (copy / "ui" / "sections" / "fitdata-garmin.overview.yaml").write_text("spec: easy-ui/sections-v1\nsections: []\n")
     dash, placed, _ = compose(copy, "overview")
-    assert placed == [] and list(dash["queries"]) == ["last_day"] and len(dash["layout"]) == 1
+    assert placed == [] and list(dash["queries"]) == ["last_day"] and len(dash["layout"]) == 2
 
 
 def test_sections_follow_the_contract():
@@ -178,131 +188,218 @@ def test_sections_follow_the_contract():
 # ------------------------------------------------------------------ every query on the sample (fitdata only)
 
 
-def _run(slug: str, days: int, db: Path = FIXTURE) -> dict:
+def _defaults(dash: dict) -> dict:
+    out = {}
+    for name, p in (dash.get("params") or {}).items():
+        out[name] = p["default"]
+    return out
+
+
+def _run(slug: str, db: Path = FIXTURE, **params) -> dict:
+    """Every query of a dashboard, with its defaults (dates: the sample's latest day, a year before
+    it for Trends' start) overridden by params."""
     dash, _, _ = compose(REPO, slug)
+    values = {**_defaults(dash), "day": "2026-11-18", "since": "2025-05-04", "until": "2026-11-18", **params}
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
         out = {}
         for name, q in dash["queries"].items():
-            cur = con.execute(q["sql"], {"days": days} if ":days" in q["sql"] else {})
+            used = {k: v for k, v in values.items() if re.search(rf":{k}\b", q["sql"])}
+            cur = con.execute(q["sql"], used)
             out[name] = {"columns": [d[0] for d in cur.description], "rows": cur.fetchall()}
         return out
     finally:
         con.close()
 
 
-def test_every_dashboard_reads_only_the_shared_views():
+def _one(r: dict) -> dict:
+    return dict(zip(r["columns"], r["rows"][0]))
+
+
+def _all(r: dict) -> list[dict]:
+    return [dict(zip(r["columns"], row)) for row in r["rows"]]
+
+
+def test_every_dashboard_reads_only_what_it_may():
     stored = {n for (n,) in _rows(FIXTURE, "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")}
     for slug in SLUGS:
         dash, _, _ = compose(REPO, slug)
         for name, q in dash["queries"].items():
             words = set(re.findall(r"[a-z_]+", q["sql"].lower()))
-            assert words & stored <= set(SHARED), (slug, name)
-
-
-@pytest.mark.parametrize("days", DAY_CHOICES)
-@pytest.mark.parametrize("slug", SLUGS)
-def test_every_query_runs_for_every_period(slug, days):
-    for name, r in _run(slug, days).items():
-        assert r["rows"], f"{slug}.{name} returned no rows for {days} days"
+            assert words & stored <= {*SHARED, *GARMIN}, (slug, name)
 
 
 @pytest.mark.parametrize("slug", SLUGS)
-def test_every_dashboard_has_the_days_control(slug):
+def test_every_control_is_shown_and_every_query_used(slug):
     dash, _, _ = compose(REPO, slug)
-    assert list(dash["params"]) == ["days"]
-    days = dash["params"]["days"]
-    assert days["label"] == "Days" and days["type"] == "choice" and [o["value"] for o in days["options"]] == list(DAY_CHOICES)
-    assert dash["layout"][0][0] == {"type": "controls"}
+    assert dash["layout"][0] == [{"type": "controls"}]
     used = {c.get("query") for row in dash["layout"] for c in row} - {None}
     assert used == set(dash["queries"]), slug  # no query is left unused, none is missing
+    sql = " ".join(q["sql"] for q in dash["queries"].values())
+    for p in dash.get("params") or {}:
+        assert re.search(rf":{p}\b", sql), (slug, p)
+    if "day" in (dash.get("params") or {}):
+        assert dash["params"]["day"]["type"] == "date" and dash["params"]["day"]["default"] == "today"
 
 
-def _window(days: int) -> tuple[str, str]:
-    end = _rows(FIXTURE, "SELECT max(date) FROM days WHERE has_data = 1")[0][0]
-    start = (dt.date.fromisoformat(end) - dt.timedelta(days=days)).isoformat()
-    return start, end  # the period is start < date <= end
+def _choices(slug: str) -> list[dict]:
+    dash, _, _ = compose(REPO, slug)
+    params = dash.get("params") or {}
+    out = [{}]
+    if "days" in params:
+        out = [{"days": o["value"]} for o in params["days"]["options"]]
+    return out
 
 
-def _one(r: dict) -> dict:
-    return dict(zip(r["columns"], r["rows"][0]))
+@pytest.mark.parametrize("slug", SLUGS)
+def test_every_query_has_rows_on_the_latest_day_for_every_period(slug):
+    for choice in _choices(slug):
+        for name, r in _run(slug, **choice).items():
+            assert r["rows"], f"{slug}.{name} returned no rows for {choice}"
 
 
-@pytest.mark.parametrize("days", DAY_CHOICES)
-def test_overview_latest_values(days):
-    start, end = _window(days)
-    row = _one(_run("overview", days)["garmin_latest"])
-    # Steps come from the last full day, the other readings from the latest day that has one.
-    steps_day, steps = _rows(FIXTURE, "SELECT date, steps FROM days WHERE has_data = 1 AND steps > 0 AND date < ? "
-                                      "ORDER BY date DESC LIMIT 1", end)[0]
-    before = [r[0] for r in _rows(FIXTURE, "SELECT steps FROM days WHERE has_data = 1 AND steps > 0 AND date < ? "
-                                           "AND date >= date(?, ?)", steps_day, steps_day, f"-{days} days")]
-    assert row["steps"] == steps
-    assert row["steps_change"] == pytest.approx(steps - sum(before) / len(before))
-    last_hrv = _rows(FIXTURE, "SELECT hrv_last_night_avg FROM days WHERE hrv_last_night_avg IS NOT NULL "
-                              "AND date > ? AND date <= ? ORDER BY date DESC LIMIT 1", start, end)[0][0]
-    assert row["hrv"] == last_hrv
-    assert all(row[k] is not None for k in row)
-    assert _run("overview", days)["last_day"]["rows"] == [(end,)]
+@pytest.mark.parametrize("slug", [s for s in SLUGS if s not in ("body", "trends")])
+@pytest.mark.parametrize("day", [NO_WATCH, OLD_DAY, "2026-03-23", "2020-01-01"])
+def test_a_day_without_data_shows_empty_panels_not_zeros(slug, day):
+    """A day the watch was not worn, one before the window kept through the day, one missing from
+    the archive and one before it: every query runs; the day's readings are empty, never 0."""
+    r = _run(slug, day=day)
+    if slug == "overview":
+        row = _one(r["garmin_today"])
+        assert row["steps"] in (None, 0) or day == OLD_DAY
+    if day != OLD_DAY:
+        for name in {"overview": ("garmin_day_energy", "garmin_day_heart"), "sleep": ("stages", "overnight"),
+                     "stress": ("through_the_day",), "heart": ("through_the_day",),
+                     "activity": ("through_the_day",)}.get(slug, ()):
+            assert r[name]["rows"] == [], (slug, name)
+    else:  # daily numbers yes, but nothing through the day
+        for name in {"sleep": ("stages",), "stress": ("through_the_day",)}.get(slug, ()):
+            assert r[name]["rows"] == [], (slug, name)
 
 
-def test_overview_daily_leaves_unrecorded_days_empty():
-    r = _run("overview", 365)["garmin_daily"]
-    days = {row[0]: dict(zip(r["columns"], row)) for row in r["rows"]}
-    no_watch = [d for (d,) in _rows(FIXTURE, "SELECT date FROM days WHERE has_data = 0")]
-    for d in no_watch:
-        assert days[d]["Steps"] is None and days[d]["Resting heart rate"] is None  # not 0
-    assert [row[0] for row in r["rows"]] == sorted(days)
+def test_a_future_day_shows_the_latest_one():
+    assert _run("overview", day="2030-01-01")["last_day"]["rows"][0][0] == LATEST
+    assert _one(_run("sleep", day="2030-01-01")["night"])["woke"] == LATEST
 
 
-@pytest.mark.parametrize("days", DAY_CHOICES)
-def test_sleep_averages_skip_missing_nights(days):
-    start, end = _window(days)
-    r = _run("sleep", days)
-    row = _one(r["summary"])
-    scores = [s for (s,) in _rows(FIXTURE, "SELECT sleep_score FROM days WHERE has_data = 1 AND sleep_score IS NOT NULL "
-                                           "AND date > ? AND date <= ?", start, end)]
-    assert row["score"] == pytest.approx(sum(scores) / len(scores))
-    assert len(r["last_nights"]["rows"]) >= 1
+def test_today_against_the_usual():
+    r = _run("overview")
+    row = _one(r["garmin_today"])
+    ready, = _rows(FIXTURE, "SELECT readiness FROM garmin_training WHERE date = ?", LATEST)[0]
+    before = [v for (v,) in _rows(FIXTURE, "SELECT readiness FROM garmin_training WHERE readiness IS NOT NULL "
+                                            "AND date < ? AND date >= date(?, '-28 days')", LATEST, LATEST)]
+    assert row["ready"] == ready and row["ready_change"] == pytest.approx(ready - sum(before) / len(before))
+    rhr, = _rows(FIXTURE, "SELECT resting_hr FROM days WHERE date = ?", LATEST)[0]
+    assert row["rhr"] == rhr
+    usual = {u["measure"]: u for u in _all(r["garmin_usual"])}
+    assert set(usual) >= {"Training readiness", "Sleep score", "Resting heart rate", "Steps"}
+    assert all(re.match(r"^(↑|↓|→)", u["compared"]) for u in usual.values() if u["compared"])
 
 
-@pytest.mark.parametrize("days", DAY_CHOICES)
-def test_activity_totals_and_weeks_add_up(days):
-    start, end = _window(days)
-    r = _run("activities", days)
-    totals = _one(r["totals"])
-    acts = _rows(FIXTURE, "SELECT type, coalesce(distance_m, 0), duration_s FROM activities WHERE date > ? AND date <= ?",
-                 start, end)
-    assert totals["count"] == len(acts) == len(r["recent"]["rows"])
-    assert totals["distance"] == pytest.approx(sum(a[1] for a in acts))
-    assert totals["time"] == pytest.approx(sum(a[2] for a in acts))
-    weekly = r["weekly"]
-    hours = sum(sum(v for v in row[4:]) for row in weekly["rows"])
-    assert hours == pytest.approx(sum(a[2] for a in acts) / 3600, abs=0.05 * len(weekly["rows"]) + 0.01)
-    weeks = [row[0] for row in weekly["rows"]]
+def test_sleep_night_matches_the_index():
+    r = _run("sleep")
+    night = _one(r["night"])
+    score, asleep = _rows(FIXTURE, "SELECT sleep_score, sleep_seconds FROM days WHERE date = ?", LATEST)[0]
+    assert night["score"] == score and night["asleep"] == asleep
+    # The stage chart: five-minute slots, exactly one stage each, from bedtime.
+    stages = _all(r["stages"])
+    assert stages[0]["time"] == night["bedtime"]
+    assert all(sum(v is not None for k, v in s.items() if k != "time") <= 1 for s in stages)
+    deep, = _rows(FIXTURE, "SELECT sleep_deep_seconds FROM days WHERE date = ?", LATEST)[0]
+    assert sum(1 for s in stages if s["Deep"]) * 300 == pytest.approx(deep, abs=900)
+
+
+@pytest.mark.parametrize("days", [14, 30, 90, 365])
+def test_sleep_nights_skip_missing_ones(days):
+    nights = _all(_run("sleep", days=days)["nights"])
+    expected = _rows(FIXTURE, "SELECT count(*) FROM days WHERE date > date(?, ?) AND date <= ?",
+                     LATEST, f"-{days} days", LATEST)[0][0]
+    assert len(nights) == expected
+    missing = [n for n in nights if n["Sleep score"] is None]
+    assert all(n["Deep"] is None for n in missing)  # not 0
+
+
+def test_stress_levels_add_up_to_the_day():
+    r = _run("stress")
+    levels = {x["level"]: x["Hours"] for x in _all(r["levels"])}
+    secs = _rows(FIXTURE, "SELECT stress_rest_seconds + stress_low_seconds + stress_medium_seconds + "
+                          "stress_high_seconds + coalesce(stress_activity_seconds, 0) FROM garmin_daily WHERE date = ?",
+                 LATEST)[0][0]
+    assert sum(v or 0 for v in levels.values()) == pytest.approx(secs / 3600, abs=0.3)
+
+
+def test_heart_baseline_and_status():
+    row = _one(_run("heart")["today"])
+    low, high, status = _rows(FIXTURE, "SELECT g.hrv_baseline_low, g.hrv_baseline_high, s.hrv_status "
+                                       "FROM garmin_daily g LEFT JOIN garmin_sleep s USING (date) WHERE date = ?",
+                              LATEST)[0]
+    assert row["baseline"] == f"{low}–{high} ms" and row["hrv_status"].lower() == (status or "").lower().replace("_", " ")
+
+
+def test_activity_leaves_the_day_in_progress_out_of_averages():
+    r = _run("activity", days=30)
+    period = _one(r["period"])
+    steps = [s for (s,) in _rows(FIXTURE, "SELECT steps FROM days WHERE has_data = 1 AND steps > 0 AND date < ? "
+                                          "AND date > date(?, '-30 days')", LATEST, LATEST)]
+    assert period["step_days"] == len(steps) and period["steps"] == pytest.approx(sum(steps) / len(steps))
+    daily = _all(r["daily"])
+    assert [d["in_progress"] for d in daily].count(1) <= 1
+    weeks = [w["week"] for w in _all(r["weekly"])]
     assert weeks == sorted(weeks) and all(dt.date.fromisoformat(w).weekday() == 0 for w in weeks)
-    # No made-up empty weeks before the archive starts, and no change against days never recorded.
-    assert weeks[0] >= "2026-01-05"
-    if days >= 90:
-        assert totals["count_change"] is None and totals["distance_change"] is None
 
 
-def test_recent_activities_show_missing_values_as_empty():
-    r = _run("activities", 365)["recent"]
-    rows = [dict(zip(r["columns"], row)) for row in r["rows"]]
-    strength = [x for x in rows if x["kind"] == "Strength training"]
+def test_training_weeks_and_activities_add_up():
+    r = _run("training", days=365)
+    acts = _rows(FIXTURE, "SELECT duration_s FROM activities WHERE date > date(?, '-365 days') AND date <= ?",
+                 LATEST, LATEST)
+    assert len(r["recent"]["rows"]) == len(acts)
+    weekly = _all(r["weekly"])
+    hours = sum(w["Running"] + w["Cycling"] + w["Walking and hiking"] + w["Other"] for w in weekly)
+    assert hours == pytest.approx(sum(a for (a,) in acts) / 3600, abs=0.05 * len(weekly) + 0.01)
+    assert weekly[0]["week"] >= "2026-01-05"  # no made-up weeks before the archive
+    recent = _all(r["recent"])
+    strength = [x for x in recent if x["kind"] == "Strength training"]
     assert strength and all(x["distance"] is None and x["pace"] is None for x in strength)
-    assert any(x["avg_hr"] is None for x in rows)
-    runs = [x for x in rows if x["kind"] == "Running"]
+    runs = [x for x in recent if x["kind"] == "Running"]
     assert runs and all(240 < x["pace"] < 480 for x in runs)  # seconds per km
+    factors = _all(r["factors"])
+    assert factors and all(0 <= f["pct"] <= 1 for f in factors if f["pct"] is not None)
 
 
-def test_trends_weeks_start_with_the_archive():
-    r = _run("trends", 365)
-    for name in ("health", "training"):
-        weeks = [row[0] for row in r[name]["rows"]]
-        assert weeks[0] == "2026-01-05" and weeks[-1] == "2026-05-04"
-        assert len(weeks) == len(set(weeks)) == 18
+def test_body_shows_only_logged_days():
+    r = _run("body", days=1095)
+    assert len(r["weight"]["rows"]) == _rows(FIXTURE, "SELECT count(*) FROM days WHERE weight_kg IS NOT NULL")[0][0]
+    assert all(x["Water"] > 0 for x in _all(r["hydration"]))
+
+
+def _metrics() -> list[str]:
+    dash, _, _ = compose(REPO, "trends")
+    return [o["value"] for o in dash["params"]["metric"]["options"]]
+
+
+@pytest.mark.parametrize("grain", ["week", "month"])
+@pytest.mark.parametrize("metric", _metrics())
+def test_trends_every_measure_by_week_and_month(metric, grain):
+    r = _run("trends", metric=metric, compare=metric, grain=grain)
+    periods = _all(r["periods"])
+    assert periods and all(p["Lowest day"] <= p["Average"] <= p["Highest day"] for p in periods if p["days"])
+    assert [p["period"] for p in periods] == sorted({p["period"] for p in periods})
+    assert periods[0]["period"] >= ("2026-01-05" if grain == "week" else "2026-01-01")
+    summary = _one(r["summary"])
+    assert summary["measure"] and summary["days"] == sum(p["days"] for p in periods) > 0
+    assert summary["lowest"] <= summary["average"] <= summary["highest"]
+    assert [p["period"] for p in _all(r["compared"])] == [p["period"] for p in periods]
+
+
+def test_trends_days_without_a_reading_are_left_out():
+    r = _run("trends", metric="resting_hr", grain="month")
+    jan = _all(r["periods"])[0]
+    values = [v for (v,) in _rows(FIXTURE, "SELECT resting_hr FROM days WHERE date LIKE '2026-01-%' "
+                                           "AND resting_hr IS NOT NULL")]
+    assert jan["days"] == len(values) and jan["Average"] == pytest.approx(sum(values) / len(values), abs=0.01)
+    # Steps: the latest day, still in progress, is not counted.
+    steps = _one(_run("trends", metric="steps")["summary"])
+    assert steps["days"] == _rows(FIXTURE, "SELECT count(*) FROM days WHERE steps > 0 AND date < ?", LATEST)[0][0]
 
 
 def test_dashboards_cope_with_an_empty_archive(tmp_path):
@@ -310,44 +407,50 @@ def test_dashboards_cope_with_an_empty_archive(tmp_path):
     empty = tmp_path / "empty.sqlite"
     shutil.copyfile(FIXTURE, empty)
     con = sqlite3.connect(empty)
-    con.executescript("DELETE FROM days__rows; DELETE FROM activities__rows; DELETE FROM garmin_files;")
+    con.executescript("DELETE FROM days__rows; DELETE FROM activities__rows; DELETE FROM garmin_files;"
+                      + "".join(f"DELETE FROM {t};" for t in GARMIN))
     con.commit()
     con.close()
     for slug in SLUGS:
-        for days in DAY_CHOICES:
-            for name, r in _run(slug, days, empty).items():
-                assert all(v is None or v == 0 for row in r["rows"][:1] for v in row[1:]), (slug, name)
+        for choice in _choices(slug):
+            for name, r in _run(slug, empty, **choice).items():
+                for row in r["rows"][:1]:
+                    assert all(v is None or v == 0 or isinstance(v, str) for v in row[1:]), (slug, name, row)
 
 
 def test_dashboards_show_a_second_apps_days_and_activities(tmp_path):
-    """The shared views at work: another app's activity shows on the Activities page, and its
-    values fill a day where fitdata-garmin had none, without any change to the dashboards."""
+    """The shared views at work: another app's activity shows on the Training page without any
+    change to the dashboards."""
     from schema_script import schema_sql
     two = tmp_path / "two.sqlite"
     shutil.copyfile(FIXTURE, two)
     project = tomllib.loads((REPO / "project.toml").read_text())
     con = sqlite3.connect(two)
     con.executescript(schema_sql(project, ["fitdata-garmin", "fitdata-strava"]))
-    end = con.execute("SELECT max(date) FROM days WHERE has_data = 1").fetchone()[0]
     con.execute("INSERT INTO activities__rows (source, id, date, type, duration_s, distance_m, start_local) "
-                "VALUES ('fitdata-strava', 1, ?, 'road_biking', 3600, 30000, ? || ' 08:00:00')", (end, end))
+                "VALUES ('fitdata-strava', 1, ?, 'road_biking', 3600, 30000, ? || ' 08:00:00')", (LATEST, LATEST))
     con.commit()
     con.close()
-    before = _one(_run("activities", 7)["totals"])
-    after = _one(_run("activities", 7, two)["totals"])
-    assert after["count"] == before["count"] + 1 and after["distance"] == pytest.approx(before["distance"] + 30000)
+    before = _run("training", days=30)["recent"]["rows"]
+    after = _run("training", two, days=30)["recent"]["rows"]
+    assert len(after) == len(before) + 1 and after[0][0] == LATEST
 
 
 def test_health_changes_say_which_way_is_good():
-    """A higher resting heart rate must not look like good news: every health delta has better:."""
-    for slug in ("overview", "sleep"):
+    """A higher resting heart rate must not look like good news: every delta says which way is
+    better, except the few where neither way is (load against the usual, weight, a chosen measure)."""
+    neutral = {("training", "acute_vs_chronic"), ("body", "weight_change"), ("trends", "change")}
+    for slug in SLUGS:
         dash, _, _ = compose(REPO, slug)
         for row in dash["layout"]:
             for c in row:
                 if "delta" in c:
-                    assert c.get("better") in ("higher", "lower"), (slug, c.get("title"))
-    (rhr,) = [c for row in compose(REPO, "overview")[0]["layout"] for c in row if c.get("delta") == "resting_hr_change"]
-    assert rhr["better"] == "lower"
+                    want = (None,) if (slug, c["delta"]) in neutral else ("higher", "lower")
+                    assert c.get("better") in want, (slug, c.get("title"))
+    rhr = [c for row in compose(REPO, "heart")[0]["layout"] for c in row if c.get("delta") == "rhr_change"]
+    assert rhr and rhr[0]["better"] == "lower"
+    stress = [c for row in compose(REPO, "stress")[0]["layout"] for c in row if c.get("delta") == "stress_change"]
+    assert stress and stress[0]["better"] == "lower"
 
 
 # ------------------------------------------------------------------ with my-easy-ui
@@ -388,8 +491,7 @@ def test_easy_ui_composes_as_the_tests_do(easyui):
     result = json.loads(out)
     assert code == 0 and result["order"] == list(SLUGS) and result["warnings"] == []
     by = {d["slug"]: d for d in result["dashboards"]}
-    assert {s: by[s]["from"] for s in SLUGS} == {"overview": "project", "sleep": "fitdata-garmin",
-                                                 "activities": "fitdata-garmin", "trends": "fitdata-garmin"}
+    assert {s: by[s]["from"] for s in SLUGS} == {s: ("project" if s == "overview" else "fitdata-garmin") for s in SLUGS}
     assert [(s["id"], s["placed"]) for s in by["overview"]["sections"]] == [
         ("garmin-readings", "after:readings"), ("garmin-trends", "after:trends")]
 

@@ -24,7 +24,7 @@ fitdata garmin --json activity <id> --source splits
 fitdata garmin --json activity <id> --records --every 10 --columns timestamp,heart_rate,enhanced_speed,enhanced_altitude
 fitdata garmin --json sources                          # what each source means
 fitdata garmin --json schema                           # index tables/columns, then:
-fitdata garmin --json sql "SELECT ... FROM days|activities|garmin_files ..."   # read-only, 1000 rows unless --limit N
+fitdata garmin --json sql "SELECT ... FROM days|activities|garmin_* ..."   # read-only, 1000 rows unless --limit N
 fitdata garmin --json describe                         # every command, its kind (read/write/admin) and arguments
 ```
 
@@ -40,8 +40,18 @@ Guidelines:
 - **Rows:** `sql` returns at most 1000 rows by default and says on stderr when there are more;
   aggregate in SQL or pass `--limit N` rather than pulling everything.
 - **Tables:** `days` and `activities` are the project's shared views (one row per day and per
-  activity, from every app of the project; the `source` column names the app). `garmin_files`
-  lists this app's stored files. `sql` reads nothing else.
+  activity, from every app of the project; the `source` column names the app). This app's own
+  tables hold what Garmin Connect shows beyond them, one row per date: `garmin_sleep` (score,
+  sub-scores and their ratings, stage percentages and ideal ranges, sleep need, restless
+  moments, overnight vitals), `garmin_daily` (time in each stress level, Body Battery charged,
+  drained and at wake, HRV baseline and weekly average, intensity minutes this week),
+  `garmin_training` (readiness and its factors, training status, acute and chronic load, load
+  balance, VO2 max, fitness age, endurance and hill scores, race predictions, acclimation);
+  `garmin_body_battery_events` (what charged or drained it); `garmin_samples` (`date`, `series`,
+  `at` local `HH:MM`, `value`: heart rate, stress, Body Battery, breathing, SpO2 and steps through
+  the day, and `sleep_*` series through the night) and `garmin_sleep_stages` (`start`, `until`,
+  `stage`), both for the most recent `intraday_days` days only; `garmin_files` lists the stored
+  files. `fitdata garmin --json schema` lists every column. `sql` reads nothing else.
 - **Exit codes:** 0 ok, 1 error, 2 usage (fix the command), 3 not found, 4 not allowed (your
   `MES_ALLOW` level is too low: ask the person), 5 refused for safety, 6 needs a person (with
   `--json`, stdout has a `needs_human` result: show its `action`, for example "run `**fitdata**
@@ -55,14 +65,15 @@ Guidelines:
 
 - This folder is the app package `fitdata_garmin` of the **fitdata** project. [`app.toml`](app.toml)
   declares it: its command (`fitdata-garmin`), its data (`[data]`: the `garmin/` folder, the
-  shared tables it writes and its own `garmin_files`), its three jobs (`[jobs.*]`, kept in step
+  shared tables it writes and its own `garmin_*` tables), its three jobs (`[jobs.*]`, kept in step
   with `systemd/`, which is the standalone way to run them; `tests/test_project.py` checks they
   match) and its dashboards (`[ui]`). It does not import mes; it answers `describe` in mes's shape.
 - Files:
   - `cli.py`: commands, `--json`, SSH forwarding, MES_ALLOW check, exit codes.
   - `describe.py`: command kinds, `describe`, MES_ALLOW. A new command needs a kind here.
   - `errors.py`: error classes and their exit codes.
-  - `config.py`: the per-machine TOML config (`data_dir`, `storage`, `[bucket]`, `[remote]`).
+  - `config.py`: the per-machine TOML config (`data_dir`, `storage`, `intraday_days`, `[bucket]`,
+    `[remote]`).
   - `paths.py`: archive layout, as Paths and as storage keys.
   - `storage.py`: the one interface to the archive files (plain files or a bucket); key checks.
   - `safefs.py`: how the files backend reaches files: name by name from the opened `garmin/`
@@ -72,6 +83,9 @@ Guidelines:
   - `sync.py`: downloading and manifests.
   - `fit.py`: FIT decoding with Garmin's SDK.
   - `index.py`: its rows in the project's shared database (`fitdata.sqlite`), from `schema.sql`.
+  - `extract.py`: what the index takes from each day's processed files: the `days` columns
+    beyond `day.json` (`DAY_COLUMNS`) and the `garmin_*` tables (`TABLES`, with their DDL). Every
+    field is read defensively: a missing, empty, null or odd value becomes NULL, never an error.
   - `schema.sql`: the exact text `mes db schema --sql` prints for the project's `project.toml`.
     `index` runs its tables and indexes every time, and its views only when they are missing:
     once they exist, `mes db sync` keeps them in line with the project's apps (a second app's rows
@@ -80,7 +94,8 @@ Guidelines:
   - `dashboards/`: its dashboards and the sections it adds to the project's Today page.
 - **The shared database:** the index writes only rows with `source = 'fitdata-garmin'` into
   `days__rows` and `activities__rows`, deletes only its own rows, and rebuilds its own
-  `garmin_files`, all in one `BEGIN IMMEDIATE` transaction. Readers use the views `days` and
+  `garmin_*` tables, all in one `BEGIN IMMEDIATE` transaction. A day whose files cannot be read
+  is logged and keeps its headline numbers; the rebuild carries on. Readers use the views `days` and
   `activities`, never the `__rows` tables. After changing `[tables]` in `project.toml`,
   regenerate `schema.sql` (`uv run python tests/schema_script.py > apps/fitdata_garmin/schema.sql`,
   or `mes db schema --sql`); `tests/test_schema.py` fails until you do.
@@ -99,7 +114,15 @@ Guidelines:
   `fitdata-garmin index` rebuilds it. Never store anything only in the index.
 - **Adding a Garmin source:** add one entry to `endpoints.py` (fetcher plus description). Sync,
   manifests and the CLI pick it up automatically. A new number in the `days` or `activities`
-  table also needs its column in `project.toml` (then regenerate `schema.sql`).
+  table also needs its column in `project.toml`, added at the end of the list (`mes db sync`
+  adds columns only at the end), then regenerate `schema.sql`, and its extraction in
+  `extract.py`. A Garmin-only number goes into a `garmin_*` table in `extract.TABLES`; a new
+  table is also listed in `app.toml` (`[data] tables`, and `[ui] tables` for the dashboards).
+- **Dashboards:** every page reads the shared views and the `garmin_*` tables in `[ui] tables`.
+  Give each component the `class:` of its family (`sleep`, `stress`, `energy`, `heart`,
+  `activity`, `training`, `body`) so its colour matches the other pages; `ui/README.md` has the
+  rest. After changing the extraction or a page, regenerate the sample
+  (`uv run python ui/fixtures/make_fixture.py`) and run `tests/test_dashboards.py`.
 - **Be gentle with Garmin:** keep throttling (`client.THROTTLE`) and the backoff on rate limits.
 - **Test** against a scratch `FITDATA_DATA_DIR` (with `FITDATA_REMOTE=""` and `FITDATA_CONFIG`
   pointing at a temporary file) before touching a real archive. `uv run python -m pytest` runs

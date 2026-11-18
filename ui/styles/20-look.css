@@ -1,0 +1,87 @@
+/* Type and small marks. No widths: easy-ui lays the rows out for every screen size. */
+
+.eui-app {
+  --eui-card-shadow: 0 0 0 1px var(--eui-border);
+}
+
+.eui-dashboard-title {
+  letter-spacing: -0.015em;
+  font-weight: 600;
+}
+
+.eui-dashboard-description {
+  color: var(--eui-muted);
+}
+
+/* Figures: even digits, a lighter weight so a row of them reads calmly. */
+.eui-value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 350;
+  letter-spacing: -0.02em;
+}
+
+.eui-td,
+.eui-readout,
+.eui-legend {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The family's colour: a dot before a reading's name ... */
+.eui-component[data-type="stat"] .eui-title::before {
+  content: "";
+  display: inline-block;
+  width: 0.5em;
+  height: 0.5em;
+  margin-right: 0.5em;
+  border-radius: 50%;
+  background: var(--fd, var(--eui-muted));
+  vertical-align: 0.08em;
+}
+
+/* ... and a short rule over each chart and table. */
+.eui-component[data-type="line"],
+.eui-component[data-type="area"],
+.eui-component[data-type="bar"],
+.eui-component[data-type="table"] {
+  background-image: linear-gradient(var(--fd, var(--eui-accent)), var(--fd, var(--eui-accent)));
+  background-size: 2.25rem 3px;
+  background-position: var(--eui-card-padding) 0;
+  background-repeat: no-repeat;
+}
+
+.eui-component[data-type="stat"] .eui-title {
+  color: var(--eui-muted);
+  font-weight: 500;
+}
+
+.eui-component .eui-title {
+  letter-spacing: 0.005em;
+}
+
+/* The notes at the end of each page: quieter than the readings. */
+.eui-component.notes .eui-text {
+  color: var(--eui-muted);
+  font-size: var(--eui-size-s);
+  line-height: 1.6;
+}
+
+.eui-component.notes .eui-text strong {
+  color: var(--eui-text);
+  font-weight: 600;
+}
+
+/* Something not logged yet takes little room and does not shout. */
+.eui-component.eui-empty .eui-title {
+  color: var(--eui-muted);
+}
+
+/* Body: a chart with nothing logged in the period is hidden. */
+.eui-component.optional.eui-empty {
+  display: none;
+}
+
+/* The table of usual values: the comparison column is the one to read. */
+[data-id="today-usual"] .eui-td:last-child {
+  color: var(--eui-text);
+  font-weight: 500;
+}

@@ -1,0 +1,47 @@
+# The fitdata look: warm paper and ink, one quiet colour per family of measures (sleep, stress,
+# energy, heart, activity, training, body; set in styles/10-families.css), the same on every page.
+# Fonts are the built-in stacks only (nothing is downloaded): Charter-like headings, the system's
+# own sans-serif for text and figures.
+name: Fitdata
+description: Calm paper and ink, one colour per family of measures, light and dark.
+
+colors:
+  accent: "#2b7a5f"
+  background: "#f5f3ee"
+  surface: "#fffdf9"
+  text: "#1c2026"
+  muted: "#5c636c"
+  border: "#e2ded5"
+  grid: "#ebe7df"
+  good: "#2b7a5f"
+  bad: "#b2452f"
+  chart: ["#2b7a5f", "#8f969d", "#5a4fcf", "#c7780f", "#c23a4b", "#2f5fb3"]
+
+dark:
+  accent: "#6cc9a2"
+  background: "#111315"
+  surface: "#191c1f"
+  text: "#ebe8e2"
+  muted: "#a2a6ab"
+  border: "#2c3035"
+  grid: "#24282c"
+  good: "#6cc9a2"
+  bad: "#f0907a"
+  chart: ["#6cc9a2", "#7d838a", "#a59cf7", "#f2b54e", "#f2808d", "#82a9f2"]
+
+fonts:
+  body: system-sans
+  headings: transitional
+  numbers: system-sans
+
+type:
+  size: 16
+  scale: 1.25
+radius: 16
+density: normal
+cards: flat
+chart:
+  line_width: 2
+  grid: dotted
+  area_opacity: 0.14
+  bar_radius: 2

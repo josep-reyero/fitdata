@@ -1,0 +1,119 @@
+/* One colour per family of measures, used the same way on every page: the dot before a reading's
+   name, the edge of its panel and the lines of its charts. A component joins a family with its
+   class: setting (sleep, stress, energy, heart, activity, training, body, trend). */
+
+.eui-app {
+  --fd-sleep: #5a4fcf;
+  --fd-sleep-soft: #a9a3ea;
+  --fd-deep: #2f2a7a;
+  --fd-light: #7b8ae2;
+  --fd-rem: #b25fc8;
+  --fd-awake: #e59a8c;
+  --fd-stress: #c7780f;
+  --fd-stress-soft: #e8b766;
+  --fd-rest: #5d97cf;
+  --fd-low: #ecbb68;
+  --fd-medium: #dc8530;
+  --fd-high: #b04a17;
+  --fd-energy: #12867f;
+  --fd-energy-soft: #7cc3bd;
+  --fd-drain: #d58450;
+  --fd-heart: #c23a4b;
+  --fd-heart-soft: #e59aa3;
+  --fd-activity: #3a8a35;
+  --fd-activity-soft: #9ccb91;
+  --fd-training: #2f5fb3;
+  --fd-training-soft: #95aee0;
+  --fd-body: #8f6a33;
+  --fd-body-soft: #cdb187;
+  --fd-trend: var(--eui-accent);
+  --fd-compare: #9a4fb0;
+  --fd-neutral: #a3a8ad;
+}
+
+.eui-app[data-theme="dark"] {
+  --fd-sleep: #a59cf7;
+  --fd-sleep-soft: #6c64c6;
+  --fd-deep: #6d63e4;
+  --fd-light: #9fb0ff;
+  --fd-rem: #dc9cee;
+  --fd-awake: #f3b1a3;
+  --fd-stress: #f2b54e;
+  --fd-stress-soft: #a67a33;
+  --fd-rest: #7ab0e3;
+  --fd-low: #f3d08f;
+  --fd-medium: #eda054;
+  --fd-high: #e8763d;
+  --fd-energy: #4fd3c4;
+  --fd-energy-soft: #2f8c83;
+  --fd-drain: #eba27a;
+  --fd-heart: #f2808d;
+  --fd-heart-soft: #a14f5a;
+  --fd-activity: #84d07a;
+  --fd-activity-soft: #4f8a48;
+  --fd-training: #82a9f2;
+  --fd-training-soft: #4c69a0;
+  --fd-body: #d5ad6c;
+  --fd-body-soft: #8c7146;
+  --fd-compare: #d79cf0;
+  --fd-neutral: #6f757c;
+}
+
+/* A family: its colour, a softer one for averages, and grey for baselines. */
+.eui-component.sleep { --fd: var(--fd-sleep); --fd-2: var(--fd-sleep-soft); }
+.eui-component.stress { --fd: var(--fd-stress); --fd-2: var(--fd-stress-soft); }
+.eui-component.energy { --fd: var(--fd-energy); --fd-2: var(--fd-energy-soft); }
+.eui-component.heart { --fd: var(--fd-heart); --fd-2: var(--fd-heart-soft); }
+.eui-component.activity { --fd: var(--fd-activity); --fd-2: var(--fd-activity-soft); }
+.eui-component.training { --fd: var(--fd-training); --fd-2: var(--fd-training-soft); }
+.eui-component.body { --fd: var(--fd-body); --fd-2: var(--fd-body-soft); }
+.eui-component.trend { --fd: var(--fd-trend); --fd-2: var(--fd-neutral); }
+.eui-component.trend-compare { --fd: var(--fd-compare); --fd-2: var(--fd-neutral); }
+
+.eui-component.sleep,
+.eui-component.stress,
+.eui-component.energy,
+.eui-component.heart,
+.eui-component.activity,
+.eui-component.training,
+.eui-component.body,
+.eui-component.trend,
+.eui-component.trend-compare {
+  --eui-chart-1: var(--fd);
+  --eui-chart-2: var(--fd-2);
+  --eui-chart-3: var(--fd-neutral);
+  --eui-chart-4: var(--fd-neutral);
+}
+
+/* Charts whose series belong to different families or stages. */
+.eui-component.pair-energy-stress { --eui-chart-1: var(--fd-energy); --eui-chart-2: var(--fd-stress-soft); }
+.eui-component.pair-heart-breath { --eui-chart-1: var(--fd-heart); --eui-chart-2: var(--fd-sleep-soft); }
+.eui-component.pair-bed-wake { --eui-chart-1: var(--fd-sleep); --eui-chart-2: var(--fd-stress); }
+.eui-component.pair-charge { --eui-chart-1: var(--fd-energy); --eui-chart-2: var(--fd-drain); }
+.eui-component.pair-intensity { --eui-chart-1: var(--fd-activity-soft); --eui-chart-2: var(--fd-activity); }
+.eui-component.pair-calories { --eui-chart-1: var(--fd-neutral); --eui-chart-2: var(--fd-activity); }
+.eui-component.pair-sports { --eui-chart-1: var(--fd-training); --eui-chart-2: var(--fd-energy); }
+.eui-component.stages {
+  --eui-chart-1: var(--fd-deep);
+  --eui-chart-2: var(--fd-light);
+  --eui-chart-3: var(--fd-rem);
+  --eui-chart-4: var(--fd-awake);
+}
+.eui-component.bands {
+  --eui-chart-1: var(--fd-rest);
+  --eui-chart-2: var(--fd-low);
+  --eui-chart-3: var(--fd-medium);
+  --eui-chart-4: var(--fd-high);
+}
+.eui-component.range-three { --eui-chart-1: var(--fd-energy); --eui-chart-2: var(--fd-energy-soft); --eui-chart-3: var(--fd-neutral); }
+.eui-component.three-levels { --eui-chart-1: var(--fd-activity); --eui-chart-2: var(--fd-activity-soft); --eui-chart-3: var(--fd-neutral); }
+.eui-component.sports {
+  --eui-chart-1: var(--fd-training);
+  --eui-chart-2: var(--fd-energy);
+  --eui-chart-3: var(--fd-activity);
+  --eui-chart-4: var(--fd-neutral);
+}
+/* The night's HRV is noisy: the 7-day average carries the colour, the baseline edges are grey. */
+.eui-component.hrv-band { --eui-chart-1: var(--fd-heart-soft); --eui-chart-2: var(--fd-heart); }
+.eui-component.load-band { --eui-chart-1: var(--fd-training); --eui-chart-2: var(--fd-training-soft); }
+.eui-component.range-lines { --eui-chart-2: var(--fd-neutral); --eui-chart-3: var(--fd-neutral); }

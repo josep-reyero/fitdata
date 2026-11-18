@@ -14,7 +14,11 @@ folder = "garmin"
 # Never copied into backups: the saved Garmin login. After restoring a backup, log in again.
 no_backup = ["data/.state/garmin-tokens.json"]
 writes = ["days", "activities"]    # its rows of the project's shared tables
-tables = ["garmin_files"]          # every stored file: path, kind, date, activity_id, bytes
+# Its own tables (extract.py): every stored file; Garmin's daily detail (sleep, the day, training)
+# and Body Battery events, one row per day or event; the series through the day and the night
+# (samples, sleep stages), for the most recent intraday_days days only.
+tables = ["garmin_files", "garmin_sleep", "garmin_daily", "garmin_training", "garmin_body_battery_events",
+          "garmin_samples", "garmin_sleep_stages"]
 rebuild = "index"                  # rebuilds all of the above from the files under garmin/
 
 # The jobs match systemd/*.timer (the standalone way to run them; tests/test_project.py checks they
@@ -43,9 +47,11 @@ memory = "512M"
 timeout = "3h"                           # about 35 throttled calls per day of history
 
 [ui]
-# Whole dashboards, in dashboards/<slug>.yaml. They read only the shared views days and activities,
-# so another app's days and activities show up in them too.
-dashboards = ["sleep", "activities", "trends"]
+# Whole dashboards, in dashboards/<slug>.yaml. They read the shared views days and activities (so
+# another app's days and activities show up in them too) and this app's detail tables below.
+dashboards = ["sleep", "stress", "heart", "activity", "training", "body", "trends"]
+tables = ["garmin_sleep", "garmin_daily", "garmin_training", "garmin_body_battery_events", "garmin_samples",
+          "garmin_sleep_stages"]
 
 # The Garmin readings on the project's Today page (ui/dashboards/overview.yaml).
 [ui.contributes.overview]

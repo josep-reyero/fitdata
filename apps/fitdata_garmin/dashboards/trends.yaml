@@ -1,156 +1,376 @@
 spec: easy-ui/v1
 title: Trends
 description: >-
-  The long view: weekly averages of your recovery, sleep, daily movement and training, so slow
-  changes stand out from day-to-day noise.
+  The long view of any measure: its weekly or monthly average with the lowest and highest day,
+  next to a second measure, so slow changes stand out from day-to-day noise.
 
 params:
-  days:
+  metric:
     type: choice
-    label: Days
-    default: 365
+    label: Measure
+    default: resting_hr
     options:
-      - {value: 7, label: 7 days}
-      - {value: 30, label: 30 days}
-      - {value: 90, label: 90 days}
-      - {value: 365, label: 365 days}
+      - {value: resting_hr, label: "Resting heart rate (bpm)"}
+      - {value: hrv, label: "Overnight HRV (ms)"}
+      - {value: sleep_score, label: "Sleep score"}
+      - {value: sleep_hours, label: "Time asleep (hours)"}
+      - {value: deep_hours, label: "Deep sleep (hours)"}
+      - {value: rem_hours, label: "REM sleep (hours)"}
+      - {value: sleep_hr, label: "Heart rate asleep (bpm)"}
+      - {value: breathing, label: "Breathing asleep (per minute)"}
+      - {value: spo2, label: "Blood oxygen asleep (%)"}
+      - {value: skin_temp, label: "Skin temperature change (°C)"}
+      - {value: stress, label: "Average stress"}
+      - {value: rest_hours, label: "Time at rest (hours)"}
+      - {value: bb_wake, label: "Body Battery at wake"}
+      - {value: bb_high, label: "Body Battery, highest"}
+      - {value: readiness, label: "Training readiness"}
+      - {value: steps, label: "Steps"}
+      - {value: intensity, label: "Intensity minutes"}
+      - {value: active_kcal, label: "Active calories"}
+      - {value: floors, label: "Floors climbed"}
+      - {value: acute_load, label: "Acute training load"}
+      - {value: vo2max, label: "VO2 max (running)"}
+      - {value: endurance, label: "Endurance score"}
+      - {value: weight, label: "Weight (kg)"}
+      - {value: fitness_age, label: "Fitness age (years)"}
+  compare:
+    type: choice
+    label: Next to
+    default: hrv
+    options:
+      - {value: resting_hr, label: "Resting heart rate (bpm)"}
+      - {value: hrv, label: "Overnight HRV (ms)"}
+      - {value: sleep_score, label: "Sleep score"}
+      - {value: sleep_hours, label: "Time asleep (hours)"}
+      - {value: deep_hours, label: "Deep sleep (hours)"}
+      - {value: rem_hours, label: "REM sleep (hours)"}
+      - {value: sleep_hr, label: "Heart rate asleep (bpm)"}
+      - {value: breathing, label: "Breathing asleep (per minute)"}
+      - {value: spo2, label: "Blood oxygen asleep (%)"}
+      - {value: skin_temp, label: "Skin temperature change (°C)"}
+      - {value: stress, label: "Average stress"}
+      - {value: rest_hours, label: "Time at rest (hours)"}
+      - {value: bb_wake, label: "Body Battery at wake"}
+      - {value: bb_high, label: "Body Battery, highest"}
+      - {value: readiness, label: "Training readiness"}
+      - {value: steps, label: "Steps"}
+      - {value: intensity, label: "Intensity minutes"}
+      - {value: active_kcal, label: "Active calories"}
+      - {value: floors, label: "Floors climbed"}
+      - {value: acute_load, label: "Acute training load"}
+      - {value: vo2max, label: "VO2 max (running)"}
+      - {value: endurance, label: "Endurance score"}
+      - {value: weight, label: "Weight (kg)"}
+      - {value: fitness_age, label: "Fitness age (years)"}
+  grain:
+    type: choice
+    label: Average per
+    default: week
+    options:
+      - {value: week, label: Week}
+      - {value: month, label: Month}
+  since:
+    type: date
+    label: From
+    default: today-1y
+  until:
+    type: date
+    label: To
+    default: today
 
 queries:
-  # One row per week (Monday to Sunday). Days without a reading are left out of each average.
-  health:
+  # The chosen measure per week (Monday to Sunday) or month: average, lowest and highest day,
+  # and how many days had a reading. Days without one are left out, never counted as 0; the
+  # archive's latest day (usually still in progress) is left out of steps, intensity, calories
+  # and floors.
+  periods:
     sql: |
-      WITH RECURSIVE end_day AS (
-        SELECT max(date) AS d FROM days WHERE has_data = 1
+      WITH r AS (SELECT (SELECT max(date) FROM days WHERE has_data = 1) AS latest),
+      base AS (
+        SELECT d.date AS date, d.resting_hr, d.hrv_last_night_avg, d.sleep_score, d.sleep_seconds, d.sleep_deep_seconds,
+               d.sleep_rem_seconds, d.sleep_hr_avg, d.sleep_respiration_avg, d.sleep_spo2_avg, d.skin_temp_deviation_c,
+               d.stress_avg, d.body_battery_high, d.steps, d.intensity_minutes, d.active_calories, d.floors_up,
+               d.weight_kg, g.stress_rest_seconds, g.body_battery_at_wake, t.readiness, t.acute_load,
+               t.vo2max_running, t.endurance_score, t.fitness_age, r.latest
+        FROM days d LEFT JOIN garmin_daily g ON g.date = d.date LEFT JOIN garmin_training t ON t.date = d.date, r
+        WHERE d.date >= :since AND d.date <= :until
       ),
-      weeks(week) AS (
-        -- From the first week of the period, or of the archive when it starts later.
-        SELECT date(max(date(e.d, '-' || (:days - 1) || ' days'),
-                        (SELECT min(date) FROM days WHERE has_data = 1)), 'weekday 0', '-6 days')
-        FROM end_day e
-        UNION ALL
-        SELECT date(week, '+7 days') FROM weeks, end_day e WHERE date(week, '+7 days') <= e.d
-      ),
-      d AS (
-        SELECT date(date, 'weekday 0', '-6 days') AS week,
-               resting_hr, hrv_last_night_avg AS hrv, sleep_score,
-               nullif(sleep_seconds, 0) AS sleep_s,
-               -- The latest day is usually still in progress, so its steps are left out.
-               CASE WHEN date < e.d THEN nullif(steps, 0) END AS steps,
-               body_battery_high, training_readiness, vo2max_running
-        FROM days, end_day e
-        WHERE has_data = 1 AND date > date(e.d, '-' || :days || ' days') AND date <= e.d
+      p AS (
+        SELECT CASE WHEN :grain = 'month' THEN strftime('%Y-%m-01', date) ELSE date(date, 'weekday 0', '-6 days') END AS period,
+               CASE :metric
+                 WHEN 'resting_hr' THEN resting_hr
+                 WHEN 'hrv' THEN hrv_last_night_avg
+                 WHEN 'sleep_score' THEN sleep_score
+                 WHEN 'sleep_hours' THEN nullif(sleep_seconds, 0) / 3600.0
+                 WHEN 'deep_hours' THEN sleep_deep_seconds / 3600.0
+                 WHEN 'rem_hours' THEN sleep_rem_seconds / 3600.0
+                 WHEN 'sleep_hr' THEN sleep_hr_avg
+                 WHEN 'breathing' THEN sleep_respiration_avg
+                 WHEN 'spo2' THEN sleep_spo2_avg
+                 WHEN 'skin_temp' THEN skin_temp_deviation_c
+                 WHEN 'stress' THEN stress_avg
+                 WHEN 'rest_hours' THEN stress_rest_seconds / 3600.0
+                 WHEN 'bb_wake' THEN body_battery_at_wake
+                 WHEN 'bb_high' THEN body_battery_high
+                 WHEN 'readiness' THEN readiness
+                 WHEN 'steps' THEN CASE WHEN date < latest THEN nullif(steps, 0) END
+                 WHEN 'intensity' THEN CASE WHEN date < latest THEN intensity_minutes END
+                 WHEN 'active_kcal' THEN CASE WHEN date < latest THEN nullif(active_calories, 0) END
+                 WHEN 'floors' THEN CASE WHEN date < latest THEN floors_up END
+                 WHEN 'acute_load' THEN acute_load
+                 WHEN 'vo2max' THEN vo2max_running
+                 WHEN 'endurance' THEN endurance_score
+                 WHEN 'weight' THEN weight_kg
+                 WHEN 'fitness_age' THEN fitness_age
+               END AS v
+        FROM base
       )
-      SELECT w.week AS week,
-             round(avg(d.resting_hr), 1) AS "Resting heart rate",
-             round(avg(d.hrv), 1) AS "Overnight HRV",
-             round(avg(d.sleep_score), 1) AS "Sleep score",
-             round(avg(d.sleep_s) / 3600, 2) AS "Hours asleep",
-             round(avg(d.steps)) AS "Steps per day",
-             round(avg(d.body_battery_high), 1) AS "Body Battery high",
-             round(avg(d.training_readiness), 1) AS "Training readiness",
-             max(d.vo2max_running) AS "VO2 max"
-      FROM weeks w LEFT JOIN d ON d.week = w.week
-      GROUP BY w.week
-      ORDER BY w.week
+      SELECT period, round(avg(v), 2) AS "Average", round(min(v), 2) AS "Lowest day",
+             round(max(v), 2) AS "Highest day", count(v) AS days
+      FROM p GROUP BY period ORDER BY period
 
-  # Training per week: time and Garmin's training load from all activities.
-  training:
+  compared:
     sql: |
-      WITH RECURSIVE end_day AS (
-        SELECT max(d) AS d FROM (
-          SELECT max(date) AS d FROM days WHERE has_data = 1
-          UNION ALL SELECT max(date) FROM activities
-        )
+      WITH r AS (SELECT (SELECT max(date) FROM days WHERE has_data = 1) AS latest),
+      base AS (
+        SELECT d.date AS date, d.resting_hr, d.hrv_last_night_avg, d.sleep_score, d.sleep_seconds, d.sleep_deep_seconds,
+               d.sleep_rem_seconds, d.sleep_hr_avg, d.sleep_respiration_avg, d.sleep_spo2_avg, d.skin_temp_deviation_c,
+               d.stress_avg, d.body_battery_high, d.steps, d.intensity_minutes, d.active_calories, d.floors_up,
+               d.weight_kg, g.stress_rest_seconds, g.body_battery_at_wake, t.readiness, t.acute_load,
+               t.vo2max_running, t.endurance_score, t.fitness_age, r.latest
+        FROM days d LEFT JOIN garmin_daily g ON g.date = d.date LEFT JOIN garmin_training t ON t.date = d.date, r
+        WHERE d.date >= :since AND d.date <= :until
       ),
-      weeks(week) AS (
-        -- From the first week of the period, or of the archive when it starts later.
-        SELECT date(max(date(e.d, '-' || (:days - 1) || ' days'),
-                        (SELECT min(date) FROM days WHERE has_data = 1)), 'weekday 0', '-6 days')
-        FROM end_day e
-        UNION ALL
-        SELECT date(week, '+7 days') FROM weeks, end_day e WHERE date(week, '+7 days') <= e.d
-      ),
-      a AS (
-        SELECT date(date, 'weekday 0', '-6 days') AS week, duration_s, training_load
-        FROM activities, end_day e
-        WHERE date > date(e.d, '-' || :days || ' days') AND date <= e.d
+      p AS (
+        SELECT CASE WHEN :grain = 'month' THEN strftime('%Y-%m-01', date) ELSE date(date, 'weekday 0', '-6 days') END AS period,
+               CASE :compare
+                 WHEN 'resting_hr' THEN resting_hr
+                 WHEN 'hrv' THEN hrv_last_night_avg
+                 WHEN 'sleep_score' THEN sleep_score
+                 WHEN 'sleep_hours' THEN nullif(sleep_seconds, 0) / 3600.0
+                 WHEN 'deep_hours' THEN sleep_deep_seconds / 3600.0
+                 WHEN 'rem_hours' THEN sleep_rem_seconds / 3600.0
+                 WHEN 'sleep_hr' THEN sleep_hr_avg
+                 WHEN 'breathing' THEN sleep_respiration_avg
+                 WHEN 'spo2' THEN sleep_spo2_avg
+                 WHEN 'skin_temp' THEN skin_temp_deviation_c
+                 WHEN 'stress' THEN stress_avg
+                 WHEN 'rest_hours' THEN stress_rest_seconds / 3600.0
+                 WHEN 'bb_wake' THEN body_battery_at_wake
+                 WHEN 'bb_high' THEN body_battery_high
+                 WHEN 'readiness' THEN readiness
+                 WHEN 'steps' THEN CASE WHEN date < latest THEN nullif(steps, 0) END
+                 WHEN 'intensity' THEN CASE WHEN date < latest THEN intensity_minutes END
+                 WHEN 'active_kcal' THEN CASE WHEN date < latest THEN nullif(active_calories, 0) END
+                 WHEN 'floors' THEN CASE WHEN date < latest THEN floors_up END
+                 WHEN 'acute_load' THEN acute_load
+                 WHEN 'vo2max' THEN vo2max_running
+                 WHEN 'endurance' THEN endurance_score
+                 WHEN 'weight' THEN weight_kg
+                 WHEN 'fitness_age' THEN fitness_age
+               END AS v
+        FROM base
       )
-      SELECT w.week AS week,
-             round(total(a.duration_s) / 3600, 1) AS "Hours of activity",
-             round(total(a.training_load)) AS "Training load"
-      FROM weeks w LEFT JOIN a ON a.week = w.week
-      GROUP BY w.week
-      ORDER BY w.week
+      SELECT period, round(avg(v), 2) AS "Average", round(min(v), 2) AS "Lowest day",
+             round(max(v), 2) AS "Highest day"
+      FROM p GROUP BY period ORDER BY period
+
+  # The range as a whole: its average, and the latest period against the first one.
+  summary:
+    sql: |
+      WITH r AS (SELECT (SELECT max(date) FROM days WHERE has_data = 1) AS latest),
+      base AS (
+        SELECT d.date AS date, d.resting_hr, d.hrv_last_night_avg, d.sleep_score, d.sleep_seconds, d.sleep_deep_seconds,
+               d.sleep_rem_seconds, d.sleep_hr_avg, d.sleep_respiration_avg, d.sleep_spo2_avg, d.skin_temp_deviation_c,
+               d.stress_avg, d.body_battery_high, d.steps, d.intensity_minutes, d.active_calories, d.floors_up,
+               d.weight_kg, g.stress_rest_seconds, g.body_battery_at_wake, t.readiness, t.acute_load,
+               t.vo2max_running, t.endurance_score, t.fitness_age, r.latest
+        FROM days d LEFT JOIN garmin_daily g ON g.date = d.date LEFT JOIN garmin_training t ON t.date = d.date, r
+        WHERE d.date >= :since AND d.date <= :until
+      ),
+      p AS (
+        SELECT CASE WHEN :grain = 'month' THEN strftime('%Y-%m-01', date) ELSE date(date, 'weekday 0', '-6 days') END AS period,
+               CASE :metric
+                 WHEN 'resting_hr' THEN resting_hr
+                 WHEN 'hrv' THEN hrv_last_night_avg
+                 WHEN 'sleep_score' THEN sleep_score
+                 WHEN 'sleep_hours' THEN nullif(sleep_seconds, 0) / 3600.0
+                 WHEN 'deep_hours' THEN sleep_deep_seconds / 3600.0
+                 WHEN 'rem_hours' THEN sleep_rem_seconds / 3600.0
+                 WHEN 'sleep_hr' THEN sleep_hr_avg
+                 WHEN 'breathing' THEN sleep_respiration_avg
+                 WHEN 'spo2' THEN sleep_spo2_avg
+                 WHEN 'skin_temp' THEN skin_temp_deviation_c
+                 WHEN 'stress' THEN stress_avg
+                 WHEN 'rest_hours' THEN stress_rest_seconds / 3600.0
+                 WHEN 'bb_wake' THEN body_battery_at_wake
+                 WHEN 'bb_high' THEN body_battery_high
+                 WHEN 'readiness' THEN readiness
+                 WHEN 'steps' THEN CASE WHEN date < latest THEN nullif(steps, 0) END
+                 WHEN 'intensity' THEN CASE WHEN date < latest THEN intensity_minutes END
+                 WHEN 'active_kcal' THEN CASE WHEN date < latest THEN nullif(active_calories, 0) END
+                 WHEN 'floors' THEN CASE WHEN date < latest THEN floors_up END
+                 WHEN 'acute_load' THEN acute_load
+                 WHEN 'vo2max' THEN vo2max_running
+                 WHEN 'endurance' THEN endurance_score
+                 WHEN 'weight' THEN weight_kg
+                 WHEN 'fitness_age' THEN fitness_age
+               END AS v
+        FROM base
+      ),
+      per AS (SELECT period, avg(v) AS a FROM p WHERE v IS NOT NULL GROUP BY period)
+      SELECT CASE :metric
+               WHEN 'resting_hr' THEN 'Resting heart rate (bpm)'
+               WHEN 'hrv' THEN 'Overnight HRV (ms)'
+               WHEN 'sleep_score' THEN 'Sleep score'
+               WHEN 'sleep_hours' THEN 'Time asleep (hours)'
+               WHEN 'deep_hours' THEN 'Deep sleep (hours)'
+               WHEN 'rem_hours' THEN 'REM sleep (hours)'
+               WHEN 'sleep_hr' THEN 'Heart rate asleep (bpm)'
+               WHEN 'breathing' THEN 'Breathing asleep (per minute)'
+               WHEN 'spo2' THEN 'Blood oxygen asleep (%)'
+               WHEN 'skin_temp' THEN 'Skin temperature change (°C)'
+               WHEN 'stress' THEN 'Average stress'
+               WHEN 'rest_hours' THEN 'Time at rest (hours)'
+               WHEN 'bb_wake' THEN 'Body Battery at wake'
+               WHEN 'bb_high' THEN 'Body Battery, highest'
+               WHEN 'readiness' THEN 'Training readiness'
+               WHEN 'steps' THEN 'Steps'
+               WHEN 'intensity' THEN 'Intensity minutes'
+               WHEN 'active_kcal' THEN 'Active calories'
+               WHEN 'floors' THEN 'Floors climbed'
+               WHEN 'acute_load' THEN 'Acute training load'
+               WHEN 'vo2max' THEN 'VO2 max (running)'
+               WHEN 'endurance' THEN 'Endurance score'
+               WHEN 'weight' THEN 'Weight (kg)'
+               WHEN 'fitness_age' THEN 'Fitness age (years)'
+             END AS measure,
+             CASE :compare
+               WHEN 'resting_hr' THEN 'Resting heart rate (bpm)'
+               WHEN 'hrv' THEN 'Overnight HRV (ms)'
+               WHEN 'sleep_score' THEN 'Sleep score'
+               WHEN 'sleep_hours' THEN 'Time asleep (hours)'
+               WHEN 'deep_hours' THEN 'Deep sleep (hours)'
+               WHEN 'rem_hours' THEN 'REM sleep (hours)'
+               WHEN 'sleep_hr' THEN 'Heart rate asleep (bpm)'
+               WHEN 'breathing' THEN 'Breathing asleep (per minute)'
+               WHEN 'spo2' THEN 'Blood oxygen asleep (%)'
+               WHEN 'skin_temp' THEN 'Skin temperature change (°C)'
+               WHEN 'stress' THEN 'Average stress'
+               WHEN 'rest_hours' THEN 'Time at rest (hours)'
+               WHEN 'bb_wake' THEN 'Body Battery at wake'
+               WHEN 'bb_high' THEN 'Body Battery, highest'
+               WHEN 'readiness' THEN 'Training readiness'
+               WHEN 'steps' THEN 'Steps'
+               WHEN 'intensity' THEN 'Intensity minutes'
+               WHEN 'active_kcal' THEN 'Active calories'
+               WHEN 'floors' THEN 'Floors climbed'
+               WHEN 'acute_load' THEN 'Acute training load'
+               WHEN 'vo2max' THEN 'VO2 max (running)'
+               WHEN 'endurance' THEN 'Endurance score'
+               WHEN 'weight' THEN 'Weight (kg)'
+               WHEN 'fitness_age' THEN 'Fitness age (years)'
+             END AS compare,
+             (SELECT avg(v) FROM p) AS average,
+             (SELECT a FROM per ORDER BY period DESC LIMIT 1) AS latest,
+             (SELECT a FROM per ORDER BY period DESC LIMIT 1) - (SELECT a FROM per ORDER BY period LIMIT 1) AS change,
+             (SELECT min(v) FROM p) AS lowest, (SELECT max(v) FROM p) AS highest,
+             (SELECT count(v) FROM p) AS days
 
 layout:
   - - type: controls
 
-  - - type: line
-      title: Resting heart rate, weekly average
-      query: health
-      x: week
-      y: Resting heart rate
-      format: decimal1
-      unit: bpm
-    - type: line
-      title: Overnight HRV, weekly average
-      query: health
-      x: week
-      y: Overnight HRV
-      format: decimal1
-      unit: ms
+  - - type: stat
+      title: Measure
+      class: trend
+      query: summary
+      value: measure
+      hint: The first chart.
+    - type: stat
+      title: Next to it
+      class: trend-compare
+      query: summary
+      value: compare
+      hint: The second chart.
 
-  - - type: line
-      title: Sleep score, weekly average
-      query: health
-      x: week
-      y: Sleep score
-      format: decimal1
-    - type: bar
-      title: Time asleep, weekly average per night
-      query: health
-      x: week
-      y: Hours asleep
-      format: decimal1
-      unit: h
-
-  - - type: bar
-      title: Steps per day, weekly average
-      query: health
-      x: week
-      y: Steps per day
+  - - type: stat
+      title: Average over the range
+      class: trend
+      query: summary
+      value: average
+      format: number
+      hint: Every day with a reading counts once.
+    - type: stat
+      title: Latest period
+      class: trend
+      query: summary
+      value: latest
+      format: number
+      delta: change
+      hint: The average of the latest week or month; the change is against the first one in the range.
+    - type: stat
+      title: Lowest day
+      class: trend
+      query: summary
+      value: lowest
+      format: number
+    - type: stat
+      title: Highest day
+      class: trend
+      query: summary
+      value: highest
+      format: number
+    - type: stat
+      title: Days with a reading
+      class: trend
+      query: summary
+      value: days
       format: integer
-    - type: line
-      title: Body Battery and readiness, weekly average
-      query: health
-      x: week
-      y: ["Body Battery high", "Training readiness"]
-      format: decimal1
 
-  - - type: bar
-      title: Hours of activity per week
-      query: training
-      x: week
-      y: Hours of activity
-      format: decimal1
-      unit: h
+  - - type: line
+      title: The measure, average per period
+      id: trend-main
+      class: [trend, range-lines]
+      query: periods
+      x: period
+      y: [Average, Lowest day, Highest day]
+      format: number
+
+  - - type: line
+      title: Next to it, the second measure
+      id: trend-compare
+      class: [trend-compare, range-lines]
+      query: compared
+      x: period
+      y: [Average, Lowest day, Highest day]
+      format: number
     - type: bar
-      title: Training load per week
-      query: training
-      x: week
-      y: Training load
+      title: Days with a reading, per period
+      class: trend
+      query: periods
+      x: period
+      y: days
       format: integer
-    - type: line
-      title: VO2 max (running)
-      query: health
-      x: week
-      y: VO2 max
-      format: decimal1
+
+  - - type: table
+      title: Every period
+      class: trend
+      query: periods
+      columns:
+        - {column: period, label: From, format: date}
+        - {column: Average, label: Average, format: number}
+        - {column: Lowest day, label: Lowest day, format: number}
+        - {column: Highest day, label: Highest day, format: number}
+        - {column: days, label: Days, format: integer}
 
   - - type: text
+      class: notes
       body: |
-        Each point is one week, Monday to Sunday. The first and the latest week may be only
-        partly covered. Weeks without readings show as gaps, never as zero.
+        Pick a **measure** and a second one to set **next to** it, the **range** of dates and
+        whether to average per week or per month. The coloured line is the average of each
+        period; the grey ones are its lowest and its highest day. A week starts on Monday; a month is
+        labelled with its first day. The first and the last period may be only partly covered.
 
-        VO2 max, training load, Body Battery and Training Readiness are **Garmin's own
-        calculations**. VO2 max only updates after outdoor runs, so some weeks have none.
+        Readiness, sleep score, stress, Body Battery, HRV, loads, VO2 max and the scores are
+        **Garmin's own calculations**. Sleep is stored on the morning you woke up.

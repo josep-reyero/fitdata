@@ -28,8 +28,8 @@ def _objects() -> dict[str, str]:
 def test_the_layout(archive):
     objects = _objects()
     assert {k: v for k, v in objects.items() if v in ("table", "view")} == {
-        "days__rows": "table", "activities__rows": "table", "garmin_files": "table",
-        "days": "view", "activities": "view"}
+        "days__rows": "table", "activities__rows": "table", "days": "view", "activities": "view",
+        **{t: "table" for t in index.APP_TABLES}}
     assert objects["days__rows_key"] == objects["activities__rows_key"] == objects["garmin_files_date"] == "index"
     with _db() as db:
         assert db.execute("SELECT source, date, steps FROM days__rows").fetchall() == [("fitdata-garmin", DAY, 1234)]
@@ -228,7 +228,7 @@ def test_query_output_is_unchanged(run):
     (act,) = json.loads(out)
     assert "source" not in act and list(act)[:3] == ["id", "date", "type"]
     code, out, _ = run("--json", "schema")
-    assert set(json.loads(out)["tables"]) == {"days", "activities", "garmin_files"}
+    assert set(json.loads(out)["tables"]) == {"days", "activities", *index.APP_TABLES}
 
 
 def test_a_database_without_the_index_says_so(tmp_path, monkeypatch, cli_run):

@@ -82,7 +82,12 @@ On the machine that keeps the archive:
 ```toml
 data_dir = "~/fitness/data"
 # storage = "files"     # the default; "bucket" keeps the files in a my-bucket-storage bucket
+# intraday_days = 60    # the default; days whose readings through the day and night the index keeps
 ```
+
+The index keeps the readings through the day and the night (heart rate, stress, Body Battery,
+breathing, SpO2, steps and sleep stages) for the most recent `intraday_days` days only, about
+11 MB for 60 days; every older day keeps its daily numbers. `0` keeps none.
 
 On any other machine, to read that archive over SSH:
 
@@ -95,7 +100,8 @@ command = "~/.local/bin/fitdata"   # default
 With a remote set, every command runs on that host (including `login` and `sync`), except
 `decode`, `describe` and `guide`. Add `--local` to use the current machine instead.
 
-Environment overrides: `FITDATA_DATA_DIR`, `FITDATA_STORAGE`, `FITDATA_REMOTE` (`""` stays local).
+Environment overrides: `FITDATA_DATA_DIR`, `FITDATA_STORAGE`, `FITDATA_INTRADAY_DAYS`,
+`FITDATA_REMOTE` (`""` stays local).
 When mes runs fitdata-garmin (`mes jobs run`, `mes db rebuild`, its systemd units or its gate), it
 sets `MES_PROJECT=fitdata` and `MES_DATA_DIR`, and that folder is used instead of `data_dir`, so the
 app writes the same `fitdata.sqlite` that `mes db` and the dashboards read (see [Where the data
@@ -190,7 +196,12 @@ fitdata garmin status      # archive overview: days, activities, last sync, logi
 
 `sql` runs one read-only `SELECT` on the index: the project's shared views `days` and
 `activities` (their first column, `source`, names the app a row came from) and the app's own
-table `garmin_files`. Numbers come back as Garmin gave them. It returns at most 1000 rows unless
+`garmin_*` tables: `garmin_sleep` (each night's score, sub-scores and vitals), `garmin_daily`
+(stress levels, Body Battery, HRV baseline, intensity week), `garmin_training` (readiness and its
+factors, training status and load, VO2 max, scores, race predictions), `garmin_body_battery_events`,
+`garmin_samples` and `garmin_sleep_stages` (readings through the day and the night, kept for the
+most recent `intraday_days`, 60 by default) and `garmin_files`. `fitdata garmin schema` lists every
+column. Numbers come back as Garmin gave them. It returns at most 1000 rows unless
 you pass `--limit N`, and says on stderr when there are more; a query may run for 30 seconds at
 most, in memory only, and one at a time per archive (a second one meanwhile exits 75: try again in
 a moment). Read commands never write to the data folder, so they also work where it is read-only
@@ -256,13 +267,38 @@ With `--json`, errors are one JSON line on stderr: `{"error", "kind", "exit_code
 
 ## Dashboards
 
-Four web pages, shown by **[my-easy-ui](https://github.com/josep-reyero/my-easy-ui)**: **Today** is
-the project's own page ([`ui/dashboards/overview.yaml`](ui/dashboards/overview.yaml)), where
-fitdata-garmin adds its readings and charts; **Sleep and recovery**, **Activities** and **Trends**
-come with the app ([`apps/fitdata_garmin/dashboards/`](apps/fitdata_garmin/dashboards/)). They
-read only the shared `days` and `activities` views of the index. See
-[`ui/README.md`](ui/README.md) for previewing them with made-up sample data and pointing them at
-your archive.
+Eight web pages, shown by **[my-easy-ui](https://github.com/josep-reyero/my-easy-ui)**. Each one
+answers one question, leads with the chosen day's few numbers against your own 7- and 28-day
+usual, then shows the detail:
+
+| Page | The question |
+|---|---|
+| **Today** | How ready am I, how did I sleep, how is the day going? |
+| **Sleep** | How long and how well did I sleep, stage by stage, and what shaped the score? |
+| **Stress and energy** | How stressful was the day, what charged and drained my Body Battery? |
+| **Heart and HRV** | Is my resting heart rate and overnight HRV where it usually is? |
+| **Activity** | Steps, intensity minutes, floors and calories against their goals. |
+| **Training** | Am I ready to train, is my load right, is my fitness moving? |
+| **Body** | Weight, body fat, fitness age, water and heat acclimation. |
+| **Trends** | Any measure per week or month over a chosen range, next to a second one. |
+
+**Today** is the project's own page ([`ui/dashboards/overview.yaml`](ui/dashboards/overview.yaml)),
+where fitdata-garmin adds its readings and charts; the others come with the app
+([`apps/fitdata_garmin/dashboards/`](apps/fitdata_garmin/dashboards/)). They read the shared
+`days` and `activities` views and the app's `garmin_*` tables. The project's look (one colour per
+family of measures, light and dark) is [`ui/theme.yaml`](ui/theme.yaml) and
+[`ui/styles/`](ui/styles/). See [`ui/README.md`](ui/README.md) for previewing them with made-up
+sample data and pointing them at your archive.
+
+| | |
+|---|---|
+| ![Today](ui/screenshots/overview.png) | ![Sleep](ui/screenshots/sleep.png) |
+| ![Stress and energy](ui/screenshots/stress.png) | ![Heart and HRV](ui/screenshots/heart.png) |
+| ![Activity](ui/screenshots/activity.png) | ![Training](ui/screenshots/training.png) |
+| ![Body](ui/screenshots/body.png) | ![Trends](ui/screenshots/trends.png) |
+| ![Sleep, dark](ui/screenshots/sleep-dark.png) | ![Today on a phone, dark](ui/screenshots/overview-phone-dark.png) |
+
+The screenshots show the made-up sample data in `ui/fixtures/`, never anyone's real numbers.
 
 ## Where the data lives
 
@@ -441,7 +477,8 @@ compressed at zstd level 19 and written in its own transaction; it runs once.
         derived/records.csv         per-sample records; laps.csv; session.json
 <data_dir>/garmin/account/          profile, devices, zones, gear, personal records
 <data_dir>/fitdata.sqlite           the project's shared database: the index (views days and
-                                    activities over days__rows and activities__rows; garmin_files)
+                                    activities over days__rows and activities__rows; the
+                                    app's garmin_* tables)
 <data_dir>/.state/                  login token and sync state
 <data_dir>/store/                   only with storage = "bucket": the bucket holding garmin/...
 ```

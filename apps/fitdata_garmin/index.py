@@ -7,6 +7,12 @@ contract, section 4). fitdata-garmin keeps in it:
                       day, columns = day.json "headline" and a few more (see project.toml)
     activities__rows  its rows of the shared table activities: one per activity
     garmin_files      its own table: every stored file (path, kind, date, activity_id, bytes)
+    garmin_sleep, garmin_daily, garmin_training, garmin_body_battery_events
+                      its own tables of Garmin's daily detail, one row per day (or per event),
+                      read from processed/<source>.json by extract.py
+    garmin_samples, garmin_sleep_stages
+                      its own tables of the series through the day and the night, for the most
+                      recent intraday_days days of the archive only (config.py; default 60)
 
 Readers use the views days and activities, which schema.sql creates when they are missing (once
 they exist, `mes db sync` keeps them in line with project.toml); never the __rows tables.
@@ -29,10 +35,11 @@ import json
 import logging
 import re
 import sqlite3
+from datetime import date as _date, timedelta as _timedelta
 from pathlib import Path
 from typing import Any
 
-from . import paths, storage
+from . import config, extract, paths, storage
 from .errors import FitdataError, Temporary
 from .safefs import make_lock_file
 
@@ -40,8 +47,17 @@ log = logging.getLogger("fitdata")
 
 APP = "fitdata-garmin"           # the source of every row this app writes ([app] name in app.toml)
 SHARED = ("days", "activities")  # [data] writes in app.toml
-FILES_TABLE = "garmin_files"     # [data] tables in app.toml
+FILES_TABLE = "garmin_files"     # [data] tables in app.toml, with extract.TABLES
 FILES_COLUMNS = ("path", "kind", "date", "activity_id", "bytes")
+APP_TABLES = (FILES_TABLE, *extract.TABLES)  # every table of this app, in app.toml's order
+# The processed sources the index reads for every day, and those it reads only for the days whose
+# series it keeps (extract.day). Other sources stay in the files.
+DAY_SOURCES = ("daily_summary", "sleep", "stress", "body_battery", "body_battery_events", "respiration", "spo2",
+               "hrv", "resting_hr", "intensity_minutes", "naps", "training_readiness",
+               "morning_training_readiness", "training_status", "training_load_balance", "max_metrics",
+               "endurance_score", "hill_score", "race_predictions", "fitness_age", "heat_altitude_acclimation",
+               "weigh_ins", "hydration")
+INTRADAY_SOURCES = ("heart_rate", "steps")
 SCHEMA_SQL = Path(__file__).with_name("schema.sql")
 BUSY_TIMEOUT_S = 60              # the contract asks for at least 30 seconds
 
@@ -127,6 +143,7 @@ def _manifests(a: storage.Archive, entries: list[storage.Entry]) -> tuple[list, 
 
 
 INT64 = (-(2**63), 2**63 - 1)
+_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 def _value(v: Any) -> Any:
@@ -151,8 +168,40 @@ def _key_ok(v: Any) -> bool:
     return isinstance(v, int) and not isinstance(v, bool) and INT64[0] <= v <= INT64[1]
 
 
-def _collect() -> tuple[list[dict], list[dict], list[dict]]:
-    """Day rows, activity rows and file rows, all read before anything is written."""
+def _read_sources(a: storage.Archive, folder: str, names: tuple[str, ...], present: set[str]) -> dict[str, Any]:
+    """processed/<name>.json of one day folder, parsed; a file that is missing, unreadable or not
+    JSON is left out (logged), so one bad file never stops the rebuild."""
+    out: dict[str, Any] = {}
+    for name in names:
+        key = f"{folder}/processed/{name}.json"
+        if key not in present:
+            continue
+        try:
+            data = a.read_json(key)
+        except Exception as e:  # noqa: BLE001  (a damaged file or object: skip it, keep the rest)
+            log.warning("index: could not read %s (%s); the rest of the day is indexed", key, type(e).__name__)
+            continue
+        if data is not None:
+            out[name] = data
+    return out
+
+
+def _detail(date: str, sources: dict[str, Any], intraday: bool) -> dict[str, Any]:
+    try:
+        return extract.day(date, sources, intraday)
+    except Exception:  # noqa: BLE001  (extract never raises on bad data; this is the last guard)
+        log.warning("index: Garmin's files for %s had a shape fitdata could not read; that day's detail is "
+                    "left out", date, exc_info=True)
+        return {"days": {}, "sleep": None, "daily": None, "training": None, "events": [], "samples": [], "stages": []}
+
+
+def intraday_days() -> int:
+    return config.load().intraday_days
+
+
+def _collect() -> tuple[list[dict], list[dict], list[dict], dict[str, list]]:
+    """Day rows, activity rows, file rows and the rows of the app's detail tables, all read before
+    anything is written."""
     a = storage.archive()
     entries = a.walk(paths.DAYS_KEY)
     day_rows, act_rows = _manifests(a, entries)
@@ -161,13 +210,39 @@ def _collect() -> tuple[list[dict], list[dict], list[dict]]:
     days: dict[Any, dict] = {}
     skipped = 0
     for key, m in day_rows:
+        headline = m.get("headline") if isinstance(m.get("headline"), dict) else {}
         row = {"date": m.get("date"), "has_data": m.get("has_data"), "complete": m.get("complete"),
-               "fetched_at": m.get("fetched_at"), **(m.get("headline") or {}),
+               "fetched_at": m.get("fetched_at"), **headline,
                "activity_count": len(m.get("activities") or []), "dir": key}
         if not _key_ok(row["date"]):
             skipped += 1
             continue
         days[row["date"]] = row  # a date seen twice: the later folder wins
+
+    # Garmin's detail for each day, from its processed files; the series through the day only for
+    # the most recent days of the archive.
+    detail: dict[str, list] = {t: [] for t in extract.TABLES}
+    keep = intraday_days()
+    newest = max((d for d in days if isinstance(d, str) and _DATE.fullmatch(d)), default=None)
+    try:
+        first_kept = (_date.fromisoformat(newest) - _timedelta(days=keep - 1)).isoformat() if newest and keep > 0 else None
+    except ValueError:  # a folder named like a date that is not one (2026-02-30)
+        first_kept = None
+    for d, row in sorted(days.items(), key=lambda kv: str(kv[0])):
+        if not (isinstance(d, str) and _DATE.fullmatch(d)):
+            continue  # no detail for a day whose date is not a calendar date
+        intraday = first_kept is not None and d >= first_kept
+        names = DAY_SOURCES + (INTRADAY_SOURCES if intraday else ())
+        got = _detail(d, _read_sources(a, row["dir"], names, keys), intraday)
+        for col, v in (got.get("days") or {}).items():
+            if row.get(col) is None:  # day.json's headline first; the files fill what it lacks
+                row[col] = v
+        for table, part in (("garmin_sleep", "sleep"), ("garmin_daily", "daily"), ("garmin_training", "training")):
+            if got.get(part):
+                detail[table].append(got[part])
+        detail["garmin_body_battery_events"] += got.get("events") or []
+        detail["garmin_sleep_stages"] += got.get("stages") or []
+        detail["garmin_samples"] += [dict(zip(("date", "series", "at", "value"), s)) for s in got.get("samples") or []]
 
     raw_fits: dict[str, list[str]] = {}
     for k in keys:
@@ -195,7 +270,7 @@ def _collect() -> tuple[list[dict], list[dict], list[dict]]:
         kind = "/".join(x for x in rel[2:-1] if not x[:4].isdigit()) or "day"
         aid = rel[3].rsplit("-", 1)[-1] if len(rel) > 3 and rel[2] == "activities" else None
         files.append({"path": e.key, "kind": kind, "date": rel[1], "activity_id": aid, "bytes": e.size})
-    return list(days.values()), list(acts.values()), files
+    return list(days.values()), list(acts.values()), files, detail
 
 
 # ------------------------------------------------------------------ writing
@@ -248,14 +323,14 @@ def _insert(db: sqlite3.Connection, table: str, columns: list[str] | tuple[str, 
 
 
 def rebuild() -> None:
-    days, acts, files = _collect()  # read everything before the write transaction starts
+    days, acts, files, detail = _collect()  # read everything before the write transaction starts
     statements = schema_statements()
     expected = expected_columns()
     (paths.DB.parent / (paths.DB.name + ".tmp")).unlink(missing_ok=True)  # a stray temporary file, never used
     # The lock of `fitdata sql`, made here so that sql can take it where it may only read the data folder.
     make_lock_file(paths.SQL_LOCK)
     try:
-        _write(statements, expected, days, acts, files)
+        _write(statements, expected, days, acts, files, detail)
     except sqlite3.OperationalError as e:
         if "locked" in str(e) or "busy" in str(e):
             raise Temporary(f"The shared database {paths.DB} was busy for more than {BUSY_TIMEOUT_S} seconds "
@@ -275,7 +350,7 @@ def _broken(e: sqlite3.DatabaseError) -> FitdataError:
 
 
 def _write(statements: list[str], expected: dict[str, list[tuple]], days: list[dict], acts: list[dict],
-           files: list[dict]) -> None:
+           files: list[dict], detail: dict[str, list]) -> None:
     db = connect()
     try:
         db.execute("BEGIN IMMEDIATE")
@@ -292,6 +367,11 @@ def _write(statements: list[str], expected: dict[str, list[tuple]], days: list[d
             for s in _FILES_DDL:
                 db.execute(s)
             _insert(db, FILES_TABLE, FILES_COLUMNS, files, None)
+            for table, rows in detail.items():  # the app's own tables: made again from the files
+                db.execute(f'DROP TABLE IF EXISTS "{table}"')
+                for s in extract.ddl(table):
+                    db.execute(s)
+                _insert(db, table, extract.columns(table), rows, None)
             db.execute("COMMIT")
         except BaseException:
             if db.in_transaction:
@@ -301,4 +381,5 @@ def _write(statements: list[str], expected: dict[str, list[tuple]], days: list[d
         db.close()
     if dropped:
         log.info("index: rebuilt the index: its tables did not match the project's schema (%s)", ", ".join(dropped))
-    log.info("index: %d days, %d activities, %d files -> %s", len(days), len(acts), len(files), paths.DB.name)
+    log.info("index: %d days, %d activities, %d files, %d samples -> %s", len(days), len(acts), len(files),
+             len(detail.get("garmin_samples") or []), paths.DB.name)

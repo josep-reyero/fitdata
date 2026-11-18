@@ -68,11 +68,11 @@ def test_app_toml():
     assert APP["app"] == {"name": "fitdata-garmin", "title": "Garmin archive", "version": "0.1.0",
                           "command": "fitdata-garmin"}
     assert APP["app"]["name"] == describe.APP_NAME == index.APP
-    assert APP["data"] == {"folder": "garmin", "writes": ["days", "activities"], "tables": ["garmin_files"],
+    assert APP["data"] == {"folder": "garmin", "writes": ["days", "activities"], "tables": list(index.APP_TABLES),
                            "rebuild": "index",
         "no_backup": ["data/.state/garmin-tokens.json"]}
     assert describe.COMMAND_KINDS[APP["data"]["rebuild"]] == "write"
-    assert tuple(APP["data"]["writes"]) == index.SHARED and APP["data"]["tables"] == [index.FILES_TABLE]
+    assert tuple(APP["data"]["writes"]) == index.SHARED and APP["data"]["tables"][0] == index.FILES_TABLE
     assert set(APP["data"]["writes"]) <= set(PROJECT["tables"])
     assert all(t.startswith("garmin_") for t in APP["data"]["tables"])  # the app's table prefix
     assert (APP_DIR / "__init__.py").is_file() and (APP_DIR / "AGENTS.md").is_file()
@@ -127,7 +127,7 @@ def test_jobs_run_write_commands_and_list_their_hosts(job):
 def test_ui_table():
     ui = PROJECT["ui"]
     assert set(ui) <= {"accent", "dashboards", "tables", "refresh_after"}
-    assert "data" not in ui and "tables" not in ui  # the allowlist is the shared views: days, activities
+    assert "data" not in ui and "tables" not in ui  # the allowlist: the shared views, then the app's [ui] tables
     assert ui["refresh_after"] == [f"fitdata-garmin.{j}" for j in APP["jobs"]]
     assert all(re.fullmatch(r"[a-z][a-z0-9-]{1,30}\.[a-z][a-z0-9-]{0,30}", r) for r in ui["refresh_after"])
     assert re.fullmatch(r"#[0-9a-fA-F]{6}", ui["accent"])
@@ -143,6 +143,8 @@ def test_app_ui_table():
         assert (APP_DIR / c["sections"]).is_file()
         assert c["sections"] not in {f"dashboards/{s}.yaml" for s in ui["dashboards"]}
     assert set(ui.get("tables", [])) <= set(APP["data"]["tables"])
+    # The dashboards read the app's detail tables, never its list of stored files.
+    assert ui["tables"] == [t for t in index.APP_TABLES if t != index.FILES_TABLE]
 
 
 def _tracked() -> list[str]:

@@ -117,12 +117,16 @@ def test_schema_sql_has_the_contracts_form():
 
 def test_project_toml_columns_are_the_indexers():
     """The fixed column lists are what the index writes: the day and activity headlines of
-    sync.py plus the few columns index.py adds (contract 8.2)."""
-    from fitdata_garmin import sync
+    sync.py, the few columns index.py adds (contract 8.2), then what extract.py reads from the
+    processed files (new columns go at the end, where `mes db sync` adds them)."""
+    from fitdata_garmin import extract, sync
     project = tomllib.loads((REPO / "project.toml").read_text())
     days = list(project["tables"]["days"]["columns"])
     assert days == ["date", "has_data", "complete", "fetched_at", *sync._day_headline(Path("/nonexistent")),
-                    "activity_count", "dir"]
+                    "activity_count", "dir", *extract.DAY_COLUMNS]
+    found = set(extract.day("2026-01-01", {})["days"])
+    assert found == set(extract.DAY_COLUMNS) | set(extract.HEADLINE_FROM_FILES)
+    assert set(extract.HEADLINE_FROM_FILES) <= set(sync._day_headline(Path("/nonexistent")))
     acts = list(project["tables"]["activities"]["columns"])
     headline = [k for k in sync._activity_headline({}) if k not in ("id", "name", "type", "start_local")]
     assert acts == ["id", "date", "type", "name", "start_local", "dir", "fit", *headline, "fetched_at", "complete",

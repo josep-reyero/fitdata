@@ -101,7 +101,7 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("sources", help="what each source contains")
     sub.add_parser("schema", help="index tables and columns")
     s = sub.add_parser("sql", help="read-only SQL on the index")
-    s.add_argument("query", help="one SELECT on the days, activities or garmin_files table")
+    s.add_argument("query", help="one SELECT on the days and activities views or the garmin_* tables (see schema)")
     s.add_argument("--limit", type=int, default=1000, help="most rows to return (default 1000)")
     sub.add_parser("status", help="archive overview")
     sub.add_parser("describe", help="every command, its kind (read, write, admin) and arguments")

@@ -11,6 +11,11 @@ File: $FITDATA_CONFIG or ~/.config/fitdata/config.toml
     # Change it with `fitdata migrate-storage --to bucket|files`, which copies and checks first.
     storage = "files"
 
+    # Optional: for how many of the archive's most recent days the index keeps the series through
+    # the day and the night (heart rate, stress, Body Battery, ... and sleep stages; default 60,
+    # 0 keeps none). Older days keep their daily numbers; the series stay in the files.
+    intraday_days = 60
+
     [bucket]                           # only used with storage = "bucket"
     store = "~/fitness/data/store"     # default: <data_dir>/store
     name = "archive"                   # default shown
@@ -21,7 +26,8 @@ File: $FITDATA_CONFIG or ~/.config/fitdata/config.toml
     host = "my-server"                 # anything `ssh` accepts (host alias, user@host)
     command = "~/.local/bin/fitdata"   # fitdata on that machine (default shown)
 
-Environment overrides: FITDATA_DATA_DIR, FITDATA_STORAGE, FITDATA_REMOTE (host; "" disables).
+Environment overrides: FITDATA_DATA_DIR, FITDATA_STORAGE, FITDATA_REMOTE (host; "" disables),
+FITDATA_INTRADAY_DAYS.
 
 The archive's location is fitdata's own setting. my-easy-software (mes) and its dashboards find
 the same folder through `[projects.fitdata] data_dir` in ~/.config/mes/config.toml (see README).
@@ -46,6 +52,8 @@ DEFAULT_REMOTE_COMMAND = "~/.local/bin/fitdata"
 DEFAULT_BUCKET = "archive"
 STORAGE_KINDS = ("files", "bucket")
 BUCKET_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")  # my-bucket-storage's bucket names
+DEFAULT_INTRADAY_DAYS = 60
+MAX_INTRADAY_DAYS = 3660
 
 
 @dataclass(frozen=True)
@@ -57,6 +65,7 @@ class Config:
     storage: str = "files"
     bucket_store: Path | None = None
     bucket_name: str = DEFAULT_BUCKET
+    intraday_days: int = DEFAULT_INTRADAY_DAYS
 
     @property
     def store_dir(self) -> Path:
@@ -106,9 +115,18 @@ def load() -> Config:
         raise ConfigProblem(f"[bucket] name in {path} is {str(name)[:40]!r}, which is not a bucket name.",
                             hint='Use 2-63 lowercase letters, digits and "-", for example name = "archive".')
     store = Path(bucket["store"]).expanduser() if bucket.get("store") else None
+    intraday = os.environ.get("FITDATA_INTRADAY_DAYS") or raw.get("intraday_days", DEFAULT_INTRADAY_DAYS)
+    try:
+        intraday = int(intraday) if not isinstance(intraday, bool) else None
+    except (TypeError, ValueError):
+        intraday = None
+    if intraday is None or not 0 <= intraday <= MAX_INTRADAY_DAYS:
+        raise ConfigProblem(f"intraday_days in {path} (or FITDATA_INTRADAY_DAYS) is not a whole number from 0 to "
+                            f"{MAX_INTRADAY_DAYS}, so fitdata stopped without doing anything.",
+                            hint=f"Set intraday_days = {DEFAULT_INTRADAY_DAYS} (the default), or leave it out.")
     cfg = Config(path=path, data_dir=data_dir, remote_host=host,
                  remote_command=remote.get("command", DEFAULT_REMOTE_COMMAND),
-                 storage=storage, bucket_store=store, bucket_name=name)
+                 storage=storage, bucket_store=store, bucket_name=name, intraday_days=intraday)
     _check_store_location(cfg)
     return cfg
 

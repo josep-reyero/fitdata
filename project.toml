@@ -46,6 +46,32 @@ vo2max_running = "number"
 training_status = "json"
 activity_count = "integer"
 dir = "text"
+# Read from the day's processed files by the index (apps/fitdata_garmin/extract.py). New columns go
+# at the end: `mes db sync` adds a missing column after the others.
+sleep_start = "text"               # local "YYYY-MM-DD HH:MM" the night's sleep began (stored on the morning's date)
+sleep_end = "text"                 # and ended
+sleep_deep_seconds = "integer"
+sleep_light_seconds = "integer"
+sleep_rem_seconds = "integer"
+sleep_awake_seconds = "integer"
+nap_seconds = "integer"
+sleep_hr_avg = "number"            # beats per minute during the night
+sleep_respiration_avg = "number"   # breaths per minute during the night
+sleep_spo2_avg = "number"          # blood oxygen during the night, percent
+skin_temp_deviation_c = "number"   # overnight skin temperature against the person's usual, degrees C
+respiration_avg = "number"         # breaths per minute while awake
+spo2_avg = "number"
+spo2_low = "number"
+steps_goal = "integer"
+floors_down = "number"
+moderate_minutes = "integer"
+vigorous_minutes = "integer"
+resting_calories = "number"
+weight_kg = "number"
+bmi = "number"
+body_fat_pct = "number"
+hydration_ml = "number"
+hydration_goal_ml = "number"
 
 [tables.activities]                # one row per activity; every app's activities are kept
 key = ["id"]
@@ -87,7 +113,7 @@ records = "integer"
 accent = "#2a7f62"
 # The menu order; the first one (Today) opens when the page starts. "overview" is the project's own
 # (ui/dashboards/), the others come from fitdata-garmin (apps/fitdata_garmin/dashboards/).
-dashboards = ["overview", "sleep", "activities", "trends"]
+dashboards = ["overview", "sleep", "stress", "heart", "activity", "training", "body", "trends"]
 # Every job rebuilds the index, so the dashboard data is rebuilt after each of them.
 refresh_after = ["fitdata-garmin.activities", "fitdata-garmin.daily", "fitdata-garmin.backfill"]
 
