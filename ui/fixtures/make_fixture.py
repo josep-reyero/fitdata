@@ -20,9 +20,16 @@ session without distance, a day without Body Battery, files that are empty, of t
 or not JSON at all, and a last day that is still in progress (its series stop at 13:20). The
 series through the day are kept for the last 7 days only, so the file stays small.
 
+The "new watch" variant is an account that has just started: the watch was put on at 10:40 on
+the first of 5 days (2026-04-30 to 2026-05-04), so there are 4 nights of sleep, no activities,
+no weigh-ins, no water, no fitness age, no training status, no HRV baseline and no race
+predictions yet. The dashboards are tested against both.
+
 Run from the repository folder:
 
     uv run python ui/fixtures/make_fixture.py            # writes ui/fixtures/fitdata-sample.db
+    uv run python ui/fixtures/make_fixture.py --variant new-watch
+                                                         # writes ui/fixtures/new-watch/fitdata-new-watch.db
     uv run python ui/fixtures/make_fixture.py --out /tmp/fitdata.sqlite
 """
 from __future__ import annotations
@@ -39,12 +46,28 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-DEFAULT_OUT = HERE / "fitdata-sample.db"
 
 SEED = 20260105
 START = date(2026, 1, 5)
 DAYS = 120
 END = START + timedelta(days=DAYS - 1)  # 2026-05-04, treated as "today" by the generator
+
+# The variants: (first day, number of days, where it is written by default). Both end on the same
+# day, so the tests use one "today" for both.
+VARIANTS = {
+    "sample": (date(2026, 1, 5), 120, HERE / "fitdata-sample.db"),
+    "new-watch": (date(2026, 4, 30), 5, HERE / "new-watch" / "fitdata-new-watch.db"),
+}
+NEW_WATCH = False              # set by use(): an account that has just started
+SETUP = timedelta(hours=10, minutes=40)  # the new watch was put on at 10:40 on its first day
+
+
+def use(variant: str) -> None:
+    """Make the generator write this variant (module settings, as the script runs once)."""
+    global START, DAYS, END, NEW_WATCH
+    START, DAYS, _ = VARIANTS[variant]
+    END = START + timedelta(days=DAYS - 1)
+    NEW_WATCH = variant == "new-watch"
 
 # Keys of sync._day_headline and sync._activity_headline, in their order. tests/test_dashboards.py
 # checks these against fitdata itself, so a new headline field shows up as a failing test.
@@ -108,6 +131,8 @@ def _utc_offset(d: date) -> int:
 def plan_activities(rng: random.Random) -> dict[int, list[str]]:
     """Which kinds of activity happen on which day index."""
     plan: dict[int, list[str]] = {}
+    if NEW_WATCH:  # nothing recorded on the watch yet
+        return plan
     for i in range(DAYS):
         if i in NO_WATCH or i in MISSING or i in SICK or i == DAYS - 1:
             continue
@@ -325,9 +350,13 @@ def make_day(rng: random.Random, i: int, d: date, acts: list[dict], vo2: float, 
     sleep_h = rng.gauss(7.6 if weekend else 7.0, 0.55) - (0.6 if sick else 0)
     target_s = int(max(4.5, min(9.5, sleep_h)) * 3600 // 60 * 60)
     sleep_ok = rng.random() > 0.06 and i != 25
+    if NEW_WATCH:
+        sleep_ok = i > 0  # put on during the first day: its first night ends on the second morning
     hrv_ok = sleep_ok and rng.random() > 0.05
     hrv_v = round(hrv)
     status = "BALANCED" if hrv_v >= 50 else ("UNBALANCED" if hrv_v >= 44 else "LOW")
+    if NEW_WATCH:
+        status = None  # Garmin gives an HRV status only once it has learnt a baseline (about 3 weeks)
     bb_wake = round(_clip(rng.gauss(78 if not sick else 52, 9), 35, 100))
     night = Night(rng, d, target_s, rest, hrv, sick, state["bb_evening"], bb_wake) if sleep_ok else None
     sleep_s = night.sleep_s if night else None
@@ -342,6 +371,8 @@ def make_day(rng: random.Random, i: int, d: date, acts: list[dict], vo2: float, 
     now = midnight + timedelta(hours=13, minutes=20) if in_progress else midnight + timedelta(days=1)
     if in_progress:
         steps = 4318  # the day is still in progress
+    if NEW_WATCH and i == 0:
+        steps = int(steps * 0.55)  # worn from 10:40 only
     move_km = steps * 0.00078
     active = round(steps * 0.04 + sum(a["calories"] for a in acts))
     vig = sum(int(a["duration_s"] // 60) for a in acts if (a["aerobic_te"] or 0) >= 3.0)
@@ -358,11 +389,12 @@ def make_day(rng: random.Random, i: int, d: date, acts: list[dict], vo2: float, 
     def in_activity(t: datetime):
         return next((a for s0, s1, a in spans if s0 <= t < s1), None)
 
-    wake = night.end if night else midnight + timedelta(hours=7)
+    day_start = midnight + SETUP if NEW_WATCH and i == 0 else midnight  # nothing before the watch was put on
+    wake = night.end if night else (day_start if day_start > midnight else midnight + timedelta(hours=7))
     bed = midnight + timedelta(hours=23, minutes=rng.randint(-40, 30))  # tonight's bedtime (next night's sleep)
 
     # Heart rate every 2 minutes.
-    hr_values, t, cur = [], midnight, rest + 18
+    hr_values, t, cur = [], day_start, rest + 18
     while t < now:
         a = in_activity(t)
         if night and night.start <= t < night.end:
@@ -377,7 +409,7 @@ def make_day(rng: random.Random, i: int, d: date, acts: list[dict], vo2: float, 
         hr_values.append([_ms(t), v if rng.random() > 0.01 else None])
         t += timedelta(minutes=2)
     # Stress and Body Battery every 3 minutes (stress.json carries both).
-    stress_rows, bb_rows, t, level, bb = [], [], midnight, stress_target, float(state["bb_evening"])
+    stress_rows, bb_rows, t, level, bb = [], [], day_start, stress_target, float(state["bb_evening"])
     drain_total = charge_total = 0.0
     while t < now:
         a = in_activity(t)
@@ -431,7 +463,7 @@ def make_day(rng: random.Random, i: int, d: date, acts: list[dict], vo2: float, 
                         "primaryActivityLevel": "active" if w > 3 else "sedentary" if w else "sleeping",
                         "activityLevelConstant": False})
     # Respiration every 2 minutes, blood oxygen hourly during the night (when the watch measured it).
-    resp_rows, t = [], midnight
+    resp_rows, t = [], day_start
     while t < now:
         asleep = (night and night.start <= t < night.end) or t < wake or t >= bed
         a = in_activity(t)
@@ -645,7 +677,7 @@ def make_day(rng: random.Random, i: int, d: date, acts: list[dict], vo2: float, 
 
     week_total = state["week_mod"] + 2 * state["week_vig"]
     weight = None
-    if d.weekday() in (0, 3, 5) and i % 9 != 4:
+    if d.weekday() in (0, 3, 5) and i % 9 != 4 and not NEW_WATCH:
         weight = round(74.6 - 1.6 * trend + rng.gauss(0, 0.35), 1)
     vo2_now = round(vo2, 1)
     race5k = 1260 * (49.0 / vo2) ** 1.05
@@ -776,6 +808,10 @@ def make_day(rng: random.Random, i: int, d: date, acts: list[dict], vo2: float, 
         "health_snapshots": [],
         "lifestyle_logging": {"calendarDate": ds, "dailyLogsReport": []},
     }
+    if NEW_WATCH:  # nothing logged in Garmin Connect yet, and too little for Garmin's estimates
+        processed["hydration"] = {"userId": 1, "calendarDate": ds, "valueInML": None, "goalInML": 2500.0, "sweatLossInML": None}
+        processed["fitness_age"] = {}
+        processed["heat_altitude_acclimation"] = {}
     # Odd files a real archive has: an empty sleep record, a stress file of the wrong shape, a
     # day whose HRV summary is null, one file that is not JSON at all.
     if i == 41:
@@ -849,7 +885,8 @@ def _index(root: Path) -> None:
     subprocess.run([sys.executable, "-I", "-c", "from fitdata_garmin import index; index.rebuild()"], env=env, check=True)
 
 
-def build(out: Path) -> Path:
+def build(out: Path, variant: str = "sample") -> Path:
+    use(variant)
     with tempfile.TemporaryDirectory(prefix="fitdata-fixture-") as tmp:
         root = Path(tmp) / "data"
         write_archive(root)
@@ -863,10 +900,13 @@ def build(out: Path) -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Write the synthetic sample index used by the dashboards' tests.")
-    ap.add_argument("--out", type=Path, default=DEFAULT_OUT, help=f"where to write it (default: {DEFAULT_OUT.name})")
+    ap.add_argument("--variant", choices=sorted(VARIANTS), default="sample",
+                    help="sample: 120 days with activities and weigh-ins; new-watch: the first 5 days of a new account")
+    ap.add_argument("--out", type=Path, help="where to write it (default: fitdata-sample.db, or "
+                    "new-watch/fitdata-new-watch.db for the new watch)")
     args = ap.parse_args(argv)
     try:
-        path = build(args.out)
+        path = build(args.out or VARIANTS[args.variant][2], args.variant)
     except (ImportError, subprocess.CalledProcessError) as e:
         print(f"Could not make the sample data, because fitdata's indexer did not run ({e}). "
               "Run this from the fitdata repository folder with: uv run python ui/fixtures/make_fixture.py",

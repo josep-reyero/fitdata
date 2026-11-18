@@ -120,9 +120,13 @@ Guidelines:
   table is also listed in `app.toml` (`[data] tables`, and `[ui] tables` for the dashboards).
 - **Dashboards:** every page reads the shared views and the `garmin_*` tables in `[ui] tables`.
   Give each component the `class:` of its family (`sleep`, `stress`, `energy`, `heart`,
-  `activity`, `training`, `body`) so its colour matches the other pages; `ui/README.md` has the
-  rest. After changing the extraction or a page, regenerate the sample
-  (`uv run python ui/fixtures/make_fixture.py`) and run `tests/test_dashboards.py`.
+  `activity`, `training`, `body`) so its colour matches the other pages. Every page works with a
+  few days of data as well as with years: changes against your usual only once there are 3 earlier
+  days, averages that say how many days they are over, `hide_empty: true` on every panel that
+  needs data a new account does not have, and one line saying what will appear on a page with
+  nothing yet; `ui/README.md` has the rest. After changing the extraction or a page, regenerate
+  both samples (`uv run python ui/fixtures/make_fixture.py`, then with `--variant new-watch`) and
+  run `tests/test_dashboards.py` (with **my-easy-ui**, `easy-ui validate` must report no warnings).
 - **Be gentle with Garmin:** keep throttling (`client.THROTTLE`) and the backoff on rate limits.
 - **Test** against a scratch `FITDATA_DATA_DIR` (with `FITDATA_REMOTE=""` and `FITDATA_CONFIG`
   pointing at a temporary file) before touching a real archive. `uv run python -m pytest` runs

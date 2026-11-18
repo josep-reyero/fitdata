@@ -12,31 +12,37 @@ params:
   days:
     type: choice
     label: Period
-    default: 90
+    default: 14
     options:
+      - {value: 14, label: 2 weeks}
       - {value: 30, label: 30 days}
       - {value: 90, label: 90 days}
       - {value: 180, label: 6 months}
       - {value: 365, label: 1 year}
 
 queries:
-  # The chosen day (or the most recent one with data), against the 28 days before it.
+  # The chosen day (or the most recent one with data), against your usual: the average of the days
+  # before it (up to 28), once there are 3.
   today:
     sql: |
       WITH sel AS (
         SELECT min(:day, (SELECT max(date) FROM days WHERE has_data = 1)) AS d
       ),
       usual AS (
-        SELECT avg(x.resting_hr) AS rhr FROM days x, sel
+        SELECT avg(x.resting_hr) AS rhr, count(x.resting_hr) AS n_rhr,
+               avg(x.hrv_last_night_avg) AS hrv, count(x.hrv_last_night_avg) AS n_hrv
+        FROM days x, sel
         WHERE x.has_data = 1 AND x.date >= date(sel.d, '-28 days') AND x.date < sel.d
       )
-      SELECT d.resting_hr AS rhr, d.resting_hr - u.rhr AS rhr_change, g.resting_hr_7d AS rhr_7d,
+      SELECT d.resting_hr AS rhr, CASE WHEN u.n_rhr >= 3 THEN d.resting_hr - u.rhr END AS rhr_change,
              d.min_hr AS low, d.max_hr AS high,
-             d.hrv_last_night_avg AS hrv, d.hrv_last_night_avg - g.hrv_weekly_avg AS hrv_vs_week,
+             d.hrv_last_night_avg AS hrv, CASE WHEN u.n_hrv >= 3 THEN d.hrv_last_night_avg - u.hrv END AS hrv_change,
+             CASE WHEN d.hrv_last_night_avg IS NULL THEN NULL
+                  WHEN d.hrv_status IS NULL OR upper(d.hrv_status) = 'NONE' THEN 'No baseline yet'
+                  ELSE upper(substr(d.hrv_status, 1, 1)) || lower(substr(replace(d.hrv_status, '_', ' '), 2)) END AS hrv_word,
              g.hrv_weekly_avg AS hrv_week,
-             upper(substr(d.hrv_status, 1, 1)) || lower(substr(d.hrv_status, 2)) AS hrv_status,
              CASE WHEN g.hrv_baseline_low IS NOT NULL
-                  THEN printf('%g–%g ms', g.hrv_baseline_low, g.hrv_baseline_high) END AS baseline
+                  THEN printf('Baseline %g–%g', g.hrv_baseline_low, g.hrv_baseline_high) END AS baseline_word
       FROM sel LEFT JOIN days d ON d.date = sel.d AND d.has_data = 1
            LEFT JOIN garmin_daily g ON g.date = sel.d, usual u
 
@@ -55,14 +61,13 @@ queries:
       WITH sel AS (
         SELECT min(:day, (SELECT max(date) FROM days WHERE has_data = 1)) AS d
       )
-      SELECT substr(s.at, 12, 5) AS time,
-             max(CASE WHEN s.series = 'sleep_hrv' THEN s.value END) AS "HRV"
+      SELECT substr(s.at, 12, 5) AS time, s.value AS "HRV"
       FROM garmin_samples s, sel
       WHERE s.date = sel.d AND s.series = 'sleep_hrv'
-      GROUP BY s.at
       ORDER BY s.at
 
-  # One row per day: the reading, its 7-day and 28-day averages, and Garmin's HRV baseline.
+  # One row per day: the reading, its 7-day average (once 3 of the 7 days have one) and 28-day
+  # average (once 14 of the 28 do), and Garmin's HRV baseline.
   daily:
     sql: |
       WITH sel AS (
@@ -70,7 +75,8 @@ queries:
       ),
       x AS (
         SELECT d.date, d.resting_hr, d.min_hr, d.max_hr, d.hrv_last_night_avg AS hrv,
-               avg(d.resting_hr) OVER w7 AS rhr_7d, avg(d.resting_hr) OVER w28 AS rhr_28d,
+               avg(d.resting_hr) OVER w7 AS rhr_7d, count(d.resting_hr) OVER w7 AS n_7d,
+               avg(d.resting_hr) OVER w28 AS rhr_28d, count(d.resting_hr) OVER w28 AS n_28d,
                g.hrv_weekly_avg, g.hrv_baseline_low, g.hrv_baseline_high
         FROM days d LEFT JOIN garmin_daily g ON g.date = d.date
         WHERE d.has_data = 1
@@ -78,10 +84,11 @@ queries:
                w28 AS (ORDER BY julianday(d.date) RANGE BETWEEN 27 PRECEDING AND CURRENT ROW)
       )
       SELECT x.date AS day,
-             x.resting_hr AS "Resting heart rate", round(x.rhr_7d, 1) AS "7-day average",
-             round(x.rhr_28d, 1) AS "28-day average",
-             x.hrv AS "Overnight HRV", x.hrv_weekly_avg AS "Weekly average",
-             x.hrv_baseline_low AS "Baseline, low end", x.hrv_baseline_high AS "Baseline, high end",
+             x.resting_hr AS "Resting heart rate",
+             CASE WHEN x.n_7d >= 3 THEN round(x.rhr_7d, 1) END AS "7-day average",
+             CASE WHEN x.n_28d >= 14 THEN round(x.rhr_28d, 1) END AS "28-day average",
+             x.hrv AS "Overnight HRV", x.hrv_weekly_avg AS "7-day HRV average",
+             x.hrv_baseline_low AS baseline_low, x.hrv_baseline_high AS baseline_high,
              x.min_hr AS "Lowest", x.max_hr AS "Highest"
       FROM x, sel
       WHERE x.date > date(sel.d, '-' || :days || ' days') AND x.date <= sel.d
@@ -92,11 +99,11 @@ queries:
       WITH sel AS (
         SELECT min(:day, (SELECT max(date) FROM days WHERE has_data = 1)) AS d
       )
-      SELECT d.date AS day, d.hrv_last_night_avg AS hrv, g.hrv_5min_high AS high, g.hrv_weekly_avg AS week,
+      SELECT d.date AS day, d.hrv_last_night_avg AS hrv, g.hrv_weekly_avg AS week,
              CASE WHEN g.hrv_baseline_low IS NOT NULL
                   THEN printf('%g–%g', g.hrv_baseline_low, g.hrv_baseline_high) END AS baseline,
              upper(substr(d.hrv_status, 1, 1)) || lower(substr(d.hrv_status, 2)) AS status,
-             d.resting_hr AS rhr, g.resting_hr_7d AS rhr_7d
+             d.resting_hr AS rhr
       FROM days d LEFT JOIN garmin_daily g ON g.date = d.date, sel
       WHERE d.has_data = 1 AND d.date > date(sel.d, '-14 days') AND d.date <= sel.d
       ORDER BY d.date DESC
@@ -113,43 +120,39 @@ layout:
       delta: rhr_change
       delta_format: decimal1
       better: lower
-      hint: Beats per minute, against your average for the 28 days before.
+      hint: Beats per minute
     - type: stat
       title: Lowest
       class: heart
       query: today
       value: low
       format: integer
-      hint: The day's lowest heart rate, usually asleep.
+      hint: Usually asleep
     - type: stat
       title: Highest
       class: heart
       query: today
       value: high
       format: integer
-      hint: The day's highest heart rate.
     - type: stat
       title: Overnight HRV
       class: heart
       query: today
       value: hrv
       format: integer
-      delta: hrv_vs_week
-      delta_format: decimal1
+      delta: hrv_change
+      delta_format: integer
       better: higher
-      hint: Milliseconds, against your 7-day HRV average.
+      note: hrv_word
+      hint: Milliseconds
     - type: stat
-      title: HRV status
+      title: HRV, 7-day average
       class: heart
       query: today
-      value: hrv_status
-      hint: Garmin's verdict, from the 7-day average against your baseline.
-    - type: stat
-      title: Your HRV baseline
-      class: heart
-      query: today
-      value: baseline
-      hint: The balanced range Garmin has learnt for you over weeks.
+      value: hrv_week
+      format: integer
+      note: baseline_word
+      hide_empty: true
 
   - - type: line
       title: Heart rate through the day
@@ -160,65 +163,74 @@ layout:
       y: Heart rate
       format: integer
       unit: bpm
-
-  - - type: line
-      title: Resting heart rate
-      class: [heart, with-baselines]
-      query: daily
-      x: day
-      y: [Resting heart rate, 7-day average, 28-day average]
-      format: integer
-      unit: bpm
+      hide_empty: true
     - type: line
-      title: Overnight HRV and your baseline
-      id: hrv-baseline
-      class: [heart, hrv-band]
-      query: daily
-      x: day
-      y: [Overnight HRV, Weekly average, "Baseline, low end", "Baseline, high end"]
-      format: integer
-      unit: ms
-
-  - - type: line
       title: HRV through the night
+      id: night-hrv
       class: heart
       query: overnight
       x: time
       y: HRV
       format: integer
       unit: ms
+      hide_empty: true
+
+  - - type: line
+      title: Resting heart rate
+      id: rhr-days
+      class: [heart, with-average]
+      query: daily
+      x: day
+      y: [Resting heart rate, 7-day average, 28-day average]
+      dashed: [7-day average, 28-day average]
+      format: integer
+      unit: bpm
+      hide_empty: true
     - type: line
+      title: Overnight HRV and your baseline
+      id: hrv-baseline
+      class: [heart, with-average]
+      query: daily
+      x: day
+      y: [Overnight HRV, 7-day HRV average]
+      dashed: 7-day HRV average
+      band: {low: baseline_low, high: baseline_high, label: Your baseline}
+      format: integer
+      unit: ms
+      hide_empty: true
+
+  - - type: line
       title: Lowest and highest heart rate
-      class: [heart, with-baselines]
+      id: hr-range
+      class: heart
       query: daily
       x: day
       y: [Highest, Lowest]
       format: integer
       unit: bpm
-
-  - - type: table
+      hide_empty: true
+    - type: table
       title: The last two weeks
       class: heart
       query: nights
+      hide_empty: true
       columns:
         - {column: day, label: Morning of, format: date}
         - {column: hrv, label: HRV (ms), format: integer}
-        - {column: high, label: 5-min high, format: integer}
         - {column: week, label: 7-day avg, format: integer}
         - {column: baseline, label: Baseline}
         - {column: status, label: Status}
         - {column: rhr, label: Resting HR, format: integer}
-        - {column: rhr_7d, label: "Resting, 7-day", format: integer}
 
   - - type: text
       class: notes
       body: |
-        **Resting heart rate** a few beats above your 28-day line often comes with stress,
-        illness, alcohol or hard training; a slow drift down over months with fitness.
-        **HRV** (heart rate variability) is measured during sleep. What matters is your 7-day
-        average against your own baseline, the two pale lines of the chart: between them is
-        balanced, below them is a sign to take it easier.
+        **Resting heart rate** a few beats above its usual often comes with stress, illness,
+        alcohol or hard training; a slow drift down over months with fitness. The arrows compare
+        the day with your average of the days before it (up to 28), once there are 3; the dashed
+        lines are the 7-day and 28-day averages, drawn once there are enough days for them.
 
-        HRV status and baseline are **Garmin's own calculations**; Garmin needs about three weeks
-        of nights before it shows a baseline. The charts through the day and night are kept for
-        the most recent weeks only.
+        **HRV** (heart rate variability) is measured during sleep. What matters is your 7-day
+        average against your own baseline, the shaded band: inside it is balanced, below it is a
+        sign to take it easier. HRV status and baseline are **Garmin's own calculations**; Garmin
+        needs about three weeks of nights before it shows a baseline.

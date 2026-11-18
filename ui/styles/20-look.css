@@ -75,13 +75,69 @@
   color: var(--eui-muted);
 }
 
-/* Body: a chart with nothing logged in the period is hidden. */
-.eui-component.optional.eui-empty {
-  display: none;
-}
-
 /* The table of usual values: the comparison column is the one to read. */
 [data-id="today-usual"] .eui-td:last-child {
   color: var(--eui-text);
+  font-weight: 500;
+}
+
+/* A duration ("7 h 41 min") is a longer figure than a score: it stays on one line and is sized to
+   its tile, so it never breaks after the hours, from a phone to a wide screen. */
+.eui-component.duration .eui-value {
+  white-space: nowrap;
+  word-spacing: -0.06em;
+  font-size: min(var(--eui-size-figure), 18cqi + 0.25rem, 19cqi);
+}
+
+/* The day a page shows, as one quiet line under its controls. */
+.eui-component.dayline {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.eui-component.dayline .eui-title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.eui-component.dayline .eui-value {
+  margin-top: 0;
+  color: var(--eui-muted);
+  font-family: var(--eui-font-body);
+  font-size: var(--eui-size-s);
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+/* A page or part of it with nothing recorded yet: one friendly line saying what will appear and
+   how, instead of empty panels. */
+.eui-component.empty-note {
+  max-width: 44rem;
+}
+
+.eui-component.empty-note .eui-title::before {
+  display: none;
+}
+
+.eui-component.empty-note .eui-title {
+  color: var(--eui-text);
+  font-weight: 600;
+}
+
+.eui-component.empty-note .eui-value {
+  color: var(--eui-muted);
+  font-family: var(--eui-font-body);
+  font-size: var(--eui-size-m);
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: 0;
+}
+
+/* A reading's word (Garmin's status, a goal) under its figure. */
+.eui-component[data-type="stat"] .eui-note {
   font-weight: 500;
 }

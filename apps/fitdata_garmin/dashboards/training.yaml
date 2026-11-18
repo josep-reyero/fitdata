@@ -12,7 +12,7 @@ params:
   days:
     type: choice
     label: Period
-    default: 90
+    default: 30
     options:
       - {value: 30, label: 30 days}
       - {value: 90, label: 90 days}
@@ -20,15 +20,24 @@ params:
       - {value: 365, label: 1 year}
 
 queries:
-  # The chosen day (or the most recent one with data). VO2 max and the scores are the latest
-  # Garmin had on or before that day: they change only after some activities.
+  # One line for an archive without any activity yet (no row at all once there is one).
+  no_activities:
+    sql: |
+      SELECT 'Start one from the watch (a walk, a run, a ride or a workout) and it shows here after the next '
+             || 'sync. Training load, training status, VO2 max and race predictions follow once Garmin has '
+             || 'a few weeks of activities; readiness needs only your sleep.' AS line
+      WHERE NOT EXISTS (SELECT 1 FROM activities)
+
+  # The chosen day (or the most recent one with data), its readiness against your usual (the
+  # average of the days before it, up to 28, once there are 3). VO2 max is the latest Garmin had on
+  # or before that day: it changes only after some activities.
   today:
     sql: |
       WITH sel AS (
         SELECT min(:day, (SELECT max(date) FROM days WHERE has_data = 1)) AS d
       ),
       usual AS (
-        SELECT avg(t.readiness) AS ready FROM garmin_training t, sel
+        SELECT avg(t.readiness) AS ready, count(t.readiness) AS n_ready FROM garmin_training t, sel
         WHERE t.date >= date(sel.d, '-28 days') AND t.date < sel.d
       ),
       latest AS (
@@ -38,12 +47,12 @@ queries:
                 AND vo2max_running IS NOT NULL ORDER BY t.date DESC LIMIT 1) AS vo2_before
         FROM sel
       )
-      SELECT t.readiness AS ready, t.readiness - u.ready AS ready_change,
-             upper(substr(t.readiness_level, 1, 1)) || lower(substr(t.readiness_level, 2)) AS level,
-             t.recovery_time_minutes * 60 AS recovery,
-             upper(substr(replace(t.status, '_', ' '), 1, 1)) || lower(substr(replace(t.status, '_', ' '), 2)) AS status,
-             t.acute_load AS acute, t.acute_load - t.chronic_load AS acute_vs_chronic,
-             t.load_ratio AS ratio, l.vo2 AS vo2, l.vo2 - l.vo2_before AS vo2_change
+      SELECT t.readiness AS ready, CASE WHEN u.n_ready >= 3 THEN t.readiness - u.ready END AS ready_change,
+             upper(substr(t.readiness_level, 1, 1)) || lower(substr(t.readiness_level, 2)) AS ready_word,
+             (t.recovery_time_minutes + 59) / 60 AS recovery,
+             CASE WHEN t.recovery_time_minutes = 0 THEN 'Fully recovered' END AS recovery_word,
+             upper(substr(replace(t.status, '_', ' '), 1, 1)) || lower(substr(replace(t.status, '_', ' '), 2)) AS status_word,
+             t.acute_load AS acute, l.vo2 AS vo2, l.vo2 - l.vo2_before AS vo2_change
       FROM sel LEFT JOIN garmin_training t ON t.date = sel.d, usual u, latest l
 
   # The parts of the morning's readiness score.
@@ -68,7 +77,7 @@ queries:
       FROM f WHERE pct IS NOT NULL OR word IS NOT NULL
       ORDER BY k
 
-  # Garmin's four-week load balance: each kind of load against its target range.
+  # Garmin's four-week load focus: each kind of load against its target range.
   balance:
     sql: |
       WITH sel AS (
@@ -83,25 +92,28 @@ queries:
         UNION ALL SELECT 2, 'High aerobic', aerobic_high_load, aerobic_high_target_min, aerobic_high_target_max FROM t
         UNION ALL SELECT 3, 'Low aerobic', aerobic_low_load, aerobic_low_target_min, aerobic_low_target_max FROM t
       )
-      SELECT kind, load, CASE WHEN lo IS NOT NULL THEN printf('%d–%d', lo, hi) END AS target,
+      SELECT kind, load AS "Load", CASE WHEN lo IS NOT NULL THEN printf('%d–%d', lo, hi) END AS target,
              CASE WHEN load < lo THEN 'Below: room for more' WHEN load > hi THEN 'Above the range' ELSE 'In range' END AS verdict
       FROM b ORDER BY k
 
+  # One row per day with a training report. The 7-day average appears once 3 of the 7 days have one.
   daily:
     sql: |
       WITH sel AS (
         SELECT min(:day, (SELECT max(date) FROM days WHERE has_data = 1)) AS d
       ),
       x AS (
-        SELECT t.date, t.readiness, avg(t.readiness) OVER w AS ready_7d, t.acute_load, t.chronic_load,
-               t.chronic_load_min, t.chronic_load_max, t.vo2max_running, t.endurance_score, t.hill_score
+        SELECT t.date, t.readiness, avg(t.readiness) OVER w AS ready_7d, count(t.readiness) OVER w AS n_7d,
+               t.acute_load, t.chronic_load, t.chronic_load_min, t.chronic_load_max, t.vo2max_running,
+               t.endurance_score, t.hill_score
         FROM garmin_training t
         WINDOW w AS (ORDER BY julianday(t.date) RANGE BETWEEN 6 PRECEDING AND CURRENT ROW)
       )
-      SELECT x.date AS day, x.readiness AS "Training readiness", round(x.ready_7d, 1) AS "7-day average",
+      SELECT x.date AS day, x.readiness AS "Training readiness",
+             CASE WHEN x.n_7d >= 3 THEN round(x.ready_7d, 1) END AS "7-day average",
              x.acute_load AS "Acute load", x.chronic_load AS "Chronic load",
-             x.chronic_load_min AS "Optimal range, low", x.chronic_load_max AS "Optimal range, high",
-             x.vo2max_running AS "VO2 max", x.endurance_score AS "Endurance score", x.hill_score AS "Hill score"
+             x.chronic_load_min AS optimal_low, x.chronic_load_max AS optimal_high,
+             x.endurance_score AS "Endurance score", x.hill_score AS "Hill score"
       FROM x, sel
       WHERE x.date > date(sel.d, '-' || :days || ' days') AND x.date <= sel.d
       ORDER BY x.date
@@ -119,7 +131,7 @@ queries:
       GROUP BY 1
       ORDER BY 1
 
-  # Predicted race times now and four weeks before.
+  # Predicted race times now and four weeks before (no rows until Garmin has predicted any).
   races:
     sql: |
       WITH sel AS (
@@ -136,7 +148,8 @@ queries:
       )
       SELECT race, now, before, now - before AS change FROM r ORDER BY k
 
-  # Distance and time per week by sport, from every app's activities.
+  # Every app's activities in the period, by sport: time per week (from the first week with an
+  # activity) and time per sport. Every sport is listed, in a fixed order, so it keeps its colour.
   weekly:
     sql: |
       WITH sel AS (
@@ -155,17 +168,38 @@ queries:
       weeks AS (
         SELECT DISTINCT date(d.date, 'weekday 0', '-6 days') AS week FROM days d, sel
         WHERE d.date > date(sel.d, '-' || :days || ' days') AND d.date <= sel.d
+          AND date(d.date, 'weekday 0', '-6 days') >= (SELECT min(week) FROM a)
       )
       SELECT w.week AS week,
-             round(total(CASE WHEN a.sport = 'run' THEN a.duration_s END) / 3600, 1) AS "Running",
-             round(total(CASE WHEN a.sport = 'ride' THEN a.duration_s END) / 3600, 1) AS "Cycling",
-             round(total(CASE WHEN a.sport = 'walk' THEN a.duration_s END) / 3600, 1) AS "Walking and hiking",
-             round(total(CASE WHEN a.sport = 'other' THEN a.duration_s END) / 3600, 1) AS "Other",
+             total(CASE WHEN a.sport = 'run' THEN a.duration_s END) AS "Running",
+             total(CASE WHEN a.sport = 'ride' THEN a.duration_s END) AS "Cycling",
+             total(CASE WHEN a.sport = 'walk' THEN a.duration_s END) AS "Walking and hiking",
+             total(CASE WHEN a.sport = 'other' THEN a.duration_s END) AS "Other",
              round(total(a.distance_m) / 1000, 1) AS "Distance",
              round(total(a.training_load)) AS "Training load"
       FROM weeks w LEFT JOIN a ON a.week = w.week
       GROUP BY w.week
       ORDER BY w.week
+
+  by_sport:
+    sql: |
+      WITH sel AS (
+        SELECT min(:day, (SELECT max(d) FROM (SELECT max(date) AS d FROM days WHERE has_data = 1
+                                              UNION ALL SELECT max(date) FROM activities))) AS d
+      ),
+      a AS (
+        SELECT CASE WHEN type LIKE '%running%' THEN 1
+                    WHEN type LIKE '%cycling%' OR type LIKE '%biking%' OR type LIKE '%ride%' THEN 2
+                    WHEN type LIKE '%walking%' OR type LIKE '%hiking%' THEN 3 ELSE 4 END AS k, duration_s
+        FROM activities, sel
+        WHERE date > date(sel.d, '-' || :days || ' days') AND date <= sel.d
+      ),
+      sports(k, sport) AS (VALUES (1, 'Running'), (2, 'Cycling'), (3, 'Walking and hiking'), (4, 'Other'))
+      SELECT s.sport, total(a.duration_s) AS "Time", count(a.k) AS activities
+      FROM sports s LEFT JOIN a ON a.k = s.k
+      WHERE EXISTS (SELECT 1 FROM a)
+      GROUP BY s.k
+      ORDER BY s.k
 
   recent:
     sql: |
@@ -176,10 +210,10 @@ queries:
       SELECT date AS day,
              upper(substr(replace(coalesce(type, 'activity'), '_', ' '), 1, 1))
                || substr(replace(coalesce(type, 'activity'), '_', ' '), 2) AS kind,
-             name, nullif(distance_m, 0) AS distance, duration_s AS duration,
+             nullif(distance_m, 0) AS distance, duration_s AS duration,
              CASE WHEN type LIKE '%running%' AND distance_m > 0
                   THEN coalesce(moving_s, duration_s) * 1000.0 / distance_m END AS pace,
-             ascent_m AS ascent, avg_hr, aerobic_te, training_load
+             avg_hr, aerobic_te, training_load
       FROM activities, sel
       WHERE date > date(sel.d, '-' || :days || ' days') AND date <= sel.d
       ORDER BY start_local DESC, id DESC
@@ -188,42 +222,43 @@ layout:
   - - type: controls
 
   - - type: stat
+      title: No activities yet
+      id: no-activities
+      class: [training, empty-note]
+      query: no_activities
+      value: line
+      hide_empty: true
+
+  - - type: stat
       title: Training readiness
       class: training
       query: today
       value: ready
       format: integer
       delta: ready_change
-      delta_format: decimal1
+      delta_format: integer
       better: higher
-      hint: Out of 100, this morning, against your average for the 28 days before.
-    - type: stat
-      title: Readiness level
-      class: training
-      query: today
-      value: level
-      hint: Poor, low, moderate, high or prime.
+      note: ready_word
+      hint: Out of 100
+      hide_empty: true
     - type: stat
       title: Recovery time
       class: training
       query: today
       value: recovery
-      format: duration
-      hint: How long until Garmin thinks you are fully recovered from your training; 0 is recovered.
-    - type: stat
-      title: Training status
-      class: training
-      query: today
-      value: status
-      hint: Garmin's reading of your load and fitness trend together.
+      format: integer
+      note: recovery_word
+      hint: Hours
+      hide_empty: true
     - type: stat
       title: Acute load
       class: training
       query: today
       value: acute
       format: integer
-      delta: acute_vs_chronic
-      hint: The last 7 days' training load; the small number is how far it is above or below your 4-week (chronic) load.
+      note: status_word
+      hint: The last 7 days
+      hide_empty: true
     - type: stat
       title: VO2 max
       class: training
@@ -232,111 +267,145 @@ layout:
       format: decimal1
       delta: vo2_change
       better: higher
-      hint: Running, the latest estimate; the change is against four weeks before.
+      hint: Running
+      hide_empty: true
 
   - - type: table
       title: What shapes your readiness
       id: factors
       class: training
       query: factors
+      hide_empty: true
       columns:
         - {column: factor, label: Factor}
         - {column: pct, label: Contribution, format: percent}
         - {column: verdict, label: Garmin's view}
-    - type: table
-      title: Four-week load balance
-      id: balance
-      class: training
-      query: balance
-      columns:
-        - {column: kind, label: Kind of load}
-        - {column: load, label: Load, format: integer}
-        - {column: target, label: Target}
-        - {column: verdict, label: Where it stands}
-
-  - - type: line
+    - type: line
       title: Training readiness
+      id: readiness-days
       class: [training, with-average]
       query: daily
       x: day
       y: [Training readiness, 7-day average]
+      dashed: 7-day average
       format: integer
-    - type: line
-      title: Acute load against your usual range
+      hide_empty: true
+
+  - - type: line
+      title: Acute load against its optimal range
       id: load-range
-      class: [training, load-band]
+      class: [training, with-average]
       query: daily
       x: day
-      y: [Acute load, Chronic load, "Optimal range, low", "Optimal range, high"]
+      y: [Acute load, Chronic load]
+      dashed: Chronic load
+      band: {low: optimal_low, high: optimal_high, label: Optimal range}
       format: integer
+      hide_empty: true
+    - type: bar
+      title: Load focus, last four weeks
+      id: load-focus
+      class: [training, load-focus]
+      query: balance
+      x: kind
+      y: Load
+      format: integer
+      colors_by: kind
+      hide_empty: true
+    - type: table
+      title: Against Garmin's targets
+      id: balance
+      class: training
+      query: balance
+      hide_empty: true
+      columns:
+        - {column: kind, label: Kind of load}
+        - {column: target, label: Target}
+        - {column: verdict, label: Where it stands}
 
   - - type: line
       title: VO2 max per week
+      id: vo2-weeks
       class: [training, pair-sports]
       query: fitness
       x: week
       y: ["VO2 max, running", "VO2 max, cycling"]
       format: decimal1
+      hide_empty: true
     - type: line
       title: Endurance score
+      id: endurance
       class: training
       query: daily
       x: day
       y: Endurance score
       format: integer
+      hide_empty: true
     - type: line
       title: Hill score
+      id: hill
       class: training
       query: daily
       x: day
       y: Hill score
       format: integer
+      hide_empty: true
 
-  - - type: table
-      title: Race predictions
-      id: races
-      class: training
-      query: races
-      columns:
-        - {column: race, label: Race}
-        - {column: now, label: Predicted, format: duration}
-        - {column: before, label: Four weeks before, format: duration}
-        - {column: change, label: Change, format: duration}
-    - type: bar
-      title: Hours of training per week
+  - - type: bar
+      title: Training time per week
       id: sports-week
       class: [training, sports]
       query: weekly
       x: week
       y: [Running, Cycling, Walking and hiking, Other]
-      format: decimal1
-      unit: h
+      format: duration
       stacked: true
+      hide_empty: true
+    - type: bar
+      title: Training time by sport
+      id: sports-total
+      class: [training, sports]
+      query: by_sport
+      x: sport
+      y: Time
+      format: duration
+      colors_by: sport
+      hide_empty: true
+    - type: table
+      title: Race predictions
+      id: races
+      class: training
+      query: races
+      hide_empty: true
+      columns:
+        - {column: race, label: Race}
+        - {column: now, label: Predicted, format: duration}
+        - {column: change, label: Change in 4 weeks, format: duration}
 
   - - type: table
       title: Activities in the period
+      id: activities
       class: training
       query: recent
       limit: 50
+      hide_empty: true
       columns:
         - {column: day, label: Date, format: date}
         - {column: kind, label: Type}
-        - {column: name, label: Name}
         - {column: distance, label: Distance, format: distance}
         - {column: duration, label: Time, format: duration}
         - {column: pace, label: Pace, format: pace}
-        - {column: ascent, label: Ascent (m), format: integer}
-        - {column: avg_hr, label: Avg HR, format: integer}
-        - {column: aerobic_te, label: Training effect, format: decimal1}
+        - {column: aerobic_te, label: Effect, format: decimal1}
         - {column: training_load, label: Load, format: integer}
 
   - - type: text
       class: notes
       body: |
-        **Acute load** is the training load of the last seven days; **chronic load** your
-        four-week average. Staying between the two pale lines builds fitness; well above them
-        raises the risk of injury. A race time that went down (a negative change) is faster.
+        **Acute load** is the training load of the last seven days and **chronic load** (dashed)
+        your four-week average; staying inside the shaded optimal range builds fitness, well above
+        it raises the risk of injury. The word under acute load is Garmin's training status. A
+        race prediction that went down in four weeks (a negative change) is faster.
 
         Readiness, status, loads, VO2 max, endurance and hill scores and race predictions are
-        **Garmin's own calculations**. VO2 max and the scores update only after some activities,
-        so weeks without them show as gaps.
+        **Garmin's own calculations**. Each part appears once Garmin has worked it out: readiness
+        after the first nights, the rest after some weeks of activities.

@@ -268,27 +268,31 @@ With `--json`, errors are one JSON line on stderr: `{"error", "kind", "exit_code
 ## Dashboards
 
 Eight web pages, shown by **[my-easy-ui](https://github.com/josep-reyero/my-easy-ui)**. Each one
-answers one question, leads with the chosen day's few numbers against your own 7- and 28-day
-usual, then shows the detail:
+answers one question, leads with the chosen day's few numbers, each with Garmin's word for it and
+an arrow against your usual (the average of the days before it, once there are 3), then shows the
+detail, from a phone to a wide screen:
 
 | Page | The question |
 |---|---|
 | **Today** | How ready am I, how did I sleep, how is the day going? |
 | **Sleep** | How long and how well did I sleep, stage by stage, and what shaped the score? |
 | **Stress and energy** | How stressful was the day, what charged and drained my Body Battery? |
-| **Heart and HRV** | Is my resting heart rate and overnight HRV where it usually is? |
+| **Heart and HRV** | Is my resting heart rate where it usually is, is my HRV inside its baseline? |
 | **Activity** | Steps, intensity minutes, floors and calories against their goals. |
-| **Training** | Am I ready to train, is my load right, is my fitness moving? |
+| **Training** | Am I ready to train, is my load in its optimal range, is my fitness moving? |
 | **Body** | Weight, body fat, fitness age, water and heat acclimation. |
-| **Trends** | Any measure per week or month over a chosen range, next to a second one. |
+| **Trends** | Any measure day by day, or per week or month, next to a second one. |
 
 **Today** is the project's own page ([`ui/dashboards/overview.yaml`](ui/dashboards/overview.yaml)),
 where fitdata-garmin adds its readings and charts; the others come with the app
 ([`apps/fitdata_garmin/dashboards/`](apps/fitdata_garmin/dashboards/)). They read the shared
-`days` and `activities` views and the app's `garmin_*` tables. The project's look (one colour per
-family of measures, light and dark) is [`ui/theme.yaml`](ui/theme.yaml) and
-[`ui/styles/`](ui/styles/). See [`ui/README.md`](ui/README.md) for previewing them with made-up
-sample data and pointing them at your archive.
+`days` and `activities` views and the app's `garmin_*` tables. The pages work from the first
+days of a new watch: charts span the days there are, averages say how many days they are over,
+arrows wait for a usual, and a part that needs data the archive does not have yet (activities,
+weigh-ins, an HRV baseline) stays out of the page, with one line saying what will appear there.
+The project's look (one colour per family of measures, light and dark) is
+[`ui/theme.yaml`](ui/theme.yaml) and [`ui/styles/`](ui/styles/). See [`ui/README.md`](ui/README.md)
+for previewing them with made-up sample data and pointing them at your archive.
 
 | | |
 |---|---|
@@ -296,9 +300,20 @@ sample data and pointing them at your archive.
 | ![Stress and energy](ui/screenshots/stress.png) | ![Heart and HRV](ui/screenshots/heart.png) |
 | ![Activity](ui/screenshots/activity.png) | ![Training](ui/screenshots/training.png) |
 | ![Body](ui/screenshots/body.png) | ![Trends](ui/screenshots/trends.png) |
-| ![Sleep, dark](ui/screenshots/sleep-dark.png) | ![Today on a phone, dark](ui/screenshots/overview-phone-dark.png) |
+| ![Sleep, dark](ui/screenshots/sleep-dark.png) | ![Today with a new watch: five days, no activities yet](ui/screenshots/overview-new-watch.png) |
+| ![Training with a new watch: one line instead of empty panels](ui/screenshots/training-new-watch.png) | ![Today on a wide screen](ui/screenshots/overview-wide.png) |
 
-The screenshots show the made-up sample data in `ui/fixtures/`, never anyone's real numbers.
+<p>
+<img src="ui/screenshots/overview-phone-dark.png" alt="Today on a phone, dark" width="195">
+<img src="ui/screenshots/heart-phone-dark.png" alt="Heart and HRV on a phone, dark" width="195">
+<img src="ui/screenshots/stress-phone.png" alt="Stress and energy on a phone" width="195">
+<img src="ui/screenshots/body-new-watch-phone.png" alt="Body on a phone with a new watch: nothing logged yet" width="195">
+</p>
+
+![Heart and HRV on a wide screen, dark](ui/screenshots/heart-wide-dark.png)
+
+The screenshots show the made-up samples in `ui/fixtures/` (120 days, and a new watch's first 5
+days), never anyone's real numbers.
 
 ## Where the data lives
 

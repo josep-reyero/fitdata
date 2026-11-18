@@ -12,7 +12,7 @@ params:
   days:
     type: choice
     label: Period
-    default: 30
+    default: 14
     options:
       - {value: 14, label: 2 weeks}
       - {value: 30, label: 30 days}
@@ -20,25 +20,35 @@ params:
       - {value: 365, label: 1 year}
 
 queries:
-  # The chosen day (or the most recent one with data), against the 28 days before it.
+  # The chosen day (or the most recent one with data), against your usual: the average of the days
+  # before it (up to 28), once there are 3.
   today:
     sql: |
       WITH sel AS (
         SELECT min(:day, (SELECT max(date) FROM days WHERE has_data = 1)) AS d
       ),
       usual AS (
-        SELECT avg(x.stress_avg) AS stress, avg(g.stress_rest_seconds) AS rest,
-               avg(g.body_battery_at_wake) AS bbw, avg(g.body_battery_charged) AS charged,
-               avg(g.body_battery_drained) AS drained
+        SELECT avg(x.stress_avg) AS stress, count(x.stress_avg) AS n_stress,
+               avg(g.stress_rest_seconds) AS rest, count(g.stress_rest_seconds) AS n_rest,
+               avg(g.body_battery_at_wake) AS bbw, count(g.body_battery_at_wake) AS n_bbw,
+               avg(g.body_battery_charged) AS charged, count(g.body_battery_charged) AS n_charged,
+               avg(g.body_battery_drained) AS drained, count(g.body_battery_drained) AS n_drained
         FROM days x LEFT JOIN garmin_daily g ON g.date = x.date, sel
         WHERE x.has_data = 1 AND x.date >= date(sel.d, '-28 days') AND x.date < sel.d
       )
-      SELECT d.stress_avg AS stress, d.stress_avg - u.stress AS stress_change,
+      SELECT d.stress_avg AS stress, CASE WHEN u.n_stress >= 3 THEN d.stress_avg - u.stress END AS stress_change,
+             CASE WHEN d.stress_avg IS NULL THEN NULL WHEN d.stress_avg <= 25 THEN 'Rest'
+                  WHEN d.stress_avg <= 50 THEN 'Low' WHEN d.stress_avg <= 75 THEN 'Medium' ELSE 'High' END AS stress_word,
              g.stress_max AS stress_max,
-             g.stress_rest_seconds AS rest, g.stress_rest_seconds - u.rest AS rest_change,
-             g.body_battery_at_wake AS bbw, g.body_battery_at_wake - u.bbw AS bbw_change,
-             g.body_battery_charged AS charged, g.body_battery_charged - u.charged AS charged_change,
-             g.body_battery_drained AS drained, g.body_battery_drained - u.drained AS drained_change
+             g.stress_rest_seconds AS rest,
+             CASE WHEN u.n_rest >= 3 THEN round((g.stress_rest_seconds - u.rest) / 60) * 60 END AS rest_change,
+             g.body_battery_at_wake AS bbw, CASE WHEN u.n_bbw >= 3 THEN g.body_battery_at_wake - u.bbw END AS bbw_change,
+             g.body_battery_charged AS charged,
+             CASE WHEN u.n_charged >= 3 THEN g.body_battery_charged - u.charged END AS charged_change,
+             g.body_battery_drained AS drained,
+             CASE WHEN u.n_drained >= 3 THEN g.body_battery_drained - u.drained END AS drained_change,
+             upper(substr(replace(replace(g.body_battery_feedback, 'DAY_', ''), '_', ' '), 1, 1))
+               || lower(substr(replace(replace(g.body_battery_feedback, 'DAY_', ''), '_', ' '), 2)) AS bb_word
       FROM sel LEFT JOIN days d ON d.date = sel.d AND d.has_data = 1
            LEFT JOIN garmin_daily g ON g.date = sel.d, usual u
 
@@ -55,18 +65,18 @@ queries:
       GROUP BY s.at
       ORDER BY s.at
 
-  # Time in each of Garmin's stress levels on the chosen day, in hours.
+  # Time in each of Garmin's stress levels on the chosen day, in seconds.
   levels:
     sql: |
       WITH sel AS (
         SELECT min(:day, (SELECT max(date) FROM days WHERE has_data = 1)) AS d
       ),
-      g AS (SELECT * FROM garmin_daily, sel WHERE date = sel.d)
-      SELECT 'Rest (0–25)' AS level, round(stress_rest_seconds / 3600.0, 2) AS "Hours" FROM g
-      UNION ALL SELECT 'Low (26–50)', round(stress_low_seconds / 3600.0, 2) FROM g
-      UNION ALL SELECT 'Medium (51–75)', round(stress_medium_seconds / 3600.0, 2) FROM g
-      UNION ALL SELECT 'High (76–100)', round(stress_high_seconds / 3600.0, 2) FROM g
-      UNION ALL SELECT 'Moving', round(stress_activity_seconds / 3600.0, 2) FROM g
+      g AS (SELECT * FROM garmin_daily, sel WHERE date = sel.d AND stress_rest_seconds IS NOT NULL)
+      SELECT 'Rest' AS level, stress_rest_seconds AS "Time" FROM g
+      UNION ALL SELECT 'Low', stress_low_seconds FROM g
+      UNION ALL SELECT 'Medium', stress_medium_seconds FROM g
+      UNION ALL SELECT 'High', stress_high_seconds FROM g
+      UNION ALL SELECT 'Moving', stress_activity_seconds FROM g
 
   # What charged and drained the Body Battery that day (and the night before it).
   events:
@@ -82,14 +92,15 @@ queries:
       WHERE e.date = sel.d
       ORDER BY e.start
 
-  # One row per day of the period, ending on the chosen day.
+  # One row per day of the period, ending on the chosen day. The 7-day average appears once 3 of
+  # the 7 days have a reading.
   daily:
     sql: |
       WITH sel AS (
         SELECT min(:day, (SELECT max(date) FROM days WHERE has_data = 1)) AS d
       ),
       x AS (
-        SELECT d.date, d.stress_avg, avg(d.stress_avg) OVER w AS stress_7d,
+        SELECT d.date, d.stress_avg, avg(d.stress_avg) OVER w AS stress_7d, count(d.stress_avg) OVER w AS n_7d,
                d.body_battery_high, d.body_battery_low, g.stress_rest_seconds, g.stress_low_seconds,
                g.stress_medium_seconds, g.stress_high_seconds, g.body_battery_charged, g.body_battery_drained,
                g.body_battery_at_wake
@@ -97,11 +108,9 @@ queries:
         WINDOW w AS (ORDER BY julianday(d.date) RANGE BETWEEN 6 PRECEDING AND CURRENT ROW)
       )
       SELECT x.date AS day,
-             round(x.stress_rest_seconds / 3600.0, 2) AS "Rest",
-             round(x.stress_low_seconds / 3600.0, 2) AS "Low",
-             round(x.stress_medium_seconds / 3600.0, 2) AS "Medium",
-             round(x.stress_high_seconds / 3600.0, 2) AS "High",
-             x.stress_avg AS "Average stress", round(x.stress_7d, 1) AS "7-day average",
+             x.stress_rest_seconds AS "Rest", x.stress_low_seconds AS "Low",
+             x.stress_medium_seconds AS "Medium", x.stress_high_seconds AS "High",
+             x.stress_avg AS "Average stress", CASE WHEN x.n_7d >= 3 THEN round(x.stress_7d, 1) END AS "7-day average",
              x.body_battery_charged AS "Charged", x.body_battery_drained AS "Drained",
              x.body_battery_high AS "Highest", x.body_battery_at_wake AS "At wake", x.body_battery_low AS "Lowest"
       FROM x, sel
@@ -118,25 +127,24 @@ layout:
       value: stress
       format: integer
       delta: stress_change
-      delta_format: decimal1
+      delta_format: integer
       better: lower
-      hint: 0 to 100 over the day, against your average for the 28 days before.
+      note: stress_word
+      hint: 0 to 100
     - type: stat
       title: Highest stress
       class: stress
       query: today
       value: stress_max
       format: integer
-      hint: The day's peak.
     - type: stat
       title: Time at rest
-      class: stress
+      class: [stress, duration]
       query: today
       value: rest
       format: duration
       delta: rest_change
       better: higher
-      hint: Stress 0 to 25, awake or asleep. This is when the Body Battery charges.
     - type: stat
       title: Body Battery at wake
       class: energy
@@ -144,9 +152,8 @@ layout:
       value: bbw
       format: integer
       delta: bbw_change
-      delta_format: decimal1
+      delta_format: integer
       better: higher
-      hint: Out of 100.
     - type: stat
       title: Charged
       class: energy
@@ -154,9 +161,9 @@ layout:
       value: charged
       format: integer
       delta: charged_change
-      delta_format: decimal1
+      delta_format: integer
       better: higher
-      hint: Points gained over the day, mostly asleep.
+      hint: Points
     - type: stat
       title: Drained
       class: energy
@@ -164,9 +171,9 @@ layout:
       value: drained
       format: integer
       delta: drained_change
-      delta_format: decimal1
+      delta_format: integer
       better: lower
-      hint: Points spent on activity, stress and being awake.
+      note: bb_word
 
   - - type: line
       title: Body Battery and stress through the day
@@ -177,26 +184,17 @@ layout:
       y: [Body Battery, Stress]
       format: integer
       step: 25
-
-  - - type: bar
+      hide_empty: true
+    - type: bar
       title: Time in each stress level
       id: levels
-      class: stress
+      class: [stress, bands]
       query: levels
       x: level
-      y: Hours
-      format: decimal1
-      unit: h
-    - type: table
-      title: What charged and drained it
-      class: energy
-      query: events
-      columns:
-        - {column: started, label: Started, format: datetime}
-        - {column: kind, label: What}
-        - {column: duration, label: For, format: duration}
-        - {column: impact, label: Body Battery, format: integer}
-        - {column: feedback, label: Garmin says}
+      y: Time
+      format: duration
+      colors_by: level
+      hide_empty: true
 
   - - type: bar
       title: Stress levels, day by day
@@ -205,16 +203,19 @@ layout:
       query: daily
       x: day
       y: [Rest, Low, Medium, High]
-      format: decimal1
-      unit: h
+      format: duration
       stacked: true
+      hide_empty: true
     - type: line
       title: Average stress
+      id: stress-days
       class: [stress, with-average]
       query: daily
       x: day
       y: [Average stress, 7-day average]
+      dashed: 7-day average
       format: integer
+      hide_empty: true
 
   - - type: bar
       title: Body Battery charged and drained
@@ -224,17 +225,31 @@ layout:
       x: day
       y: [Charged, Drained]
       format: integer
+      hide_empty: true
     - type: line
-      title: Body Battery, highest, at wake and lowest
+      title: Body Battery at wake, and the day's range
       id: bb-range
-      class: [energy, range-three]
+      class: energy
       query: daily
       x: day
-      y: [Highest, At wake, Lowest]
+      y: At wake
+      band: {low: Lowest, high: Highest, label: Lowest to highest}
       format: integer
       step: 25
+      hide_empty: true
 
-  - - type: text
+  - - type: table
+      title: What charged and drained it
+      class: energy
+      query: events
+      hide_empty: true
+      columns:
+        - {column: started, label: From, format: clock}
+        - {column: kind, label: What}
+        - {column: duration, label: For, format: duration}
+        - {column: impact, label: Body Battery, format: integer}
+        - {column: feedback, label: Garmin says}
+    - type: text
       class: notes
       body: |
         **Stress** is Garmin's reading of your nervous system from heart rate variability, 0 to
@@ -242,5 +257,6 @@ layout:
         so activities show as gaps. **Body Battery** charges when stress is at rest, above all
         asleep, and drains with activity and stress.
 
-        Both are **Garmin's own calculations**. A dash means the watch had no reading. The chart
-        through the day is kept for the most recent weeks only.
+        The arrows compare the day with **your usual**, the average of the days before it (up to
+        28); they appear once there are 3. Both measures are **Garmin's own calculations**. The
+        chart through the day is kept for the most recent weeks only.

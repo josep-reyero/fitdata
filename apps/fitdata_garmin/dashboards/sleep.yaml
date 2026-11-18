@@ -1,8 +1,8 @@
 spec: easy-ui/v1
 title: Sleep
 description: >-
-  How long and how well you slept: last night stage by stage, what shaped its score, and how
-  your nights have gone lately. Each night is shown on the date you woke up.
+  How long and how well you slept: the night stage by stage, what shaped its score, and how your
+  nights have gone. Each night is shown on the date you woke up.
 
 params:
   day:
@@ -12,7 +12,7 @@ params:
   days:
     type: choice
     label: Period
-    default: 30
+    default: 14
     options:
       - {value: 14, label: 2 weeks}
       - {value: 30, label: 30 days}
@@ -20,50 +20,53 @@ params:
       - {value: 365, label: 1 year}
 
 queries:
-  # The chosen night (or the most recent one with data), against the 28 nights before it.
+  # The chosen night (or the most recent one with data), against your usual: the average of the
+  # nights before it (up to 28), once there are 3. Bedtime and wake time are in seconds from the
+  # midnight before the night (23:10 is 83400, 00:30 is 88200, 06:45 is 110700), so nights before
+  # and after midnight average correctly; format: clock shows them as times of day.
   night:
     sql: |
       WITH sel AS (
         SELECT min(:day, (SELECT max(date) FROM days WHERE has_data = 1)) AS d
       ),
+      n AS (
+        SELECT x.date, x.sleep_score AS score, nullif(x.sleep_seconds, 0) AS asleep, x.hrv_last_night_avg AS hrv,
+               round((julianday(x.sleep_start) - julianday(date(x.sleep_end, '-1 day'))) * 86400) AS bed,
+               round((julianday(x.sleep_end) - julianday(date(x.sleep_end, '-1 day'))) * 86400) AS wake
+        FROM days x
+      ),
       usual AS (
-        SELECT avg(x.sleep_score) AS score, avg(nullif(x.sleep_seconds, 0)) AS asleep,
-               avg(x.hrv_last_night_avg) AS hrv
-        FROM days x, sel
-        WHERE x.has_data = 1 AND x.date >= date(sel.d, '-28 days') AND x.date < sel.d
+        SELECT avg(n.score) AS score, count(n.score) AS n_score, avg(n.asleep) AS asleep, count(n.asleep) AS n_asleep,
+               avg(n.hrv) AS hrv, count(n.hrv) AS n_hrv, avg(n.bed) AS bed, avg(n.wake) AS wake, count(n.bed) AS n_bed
+        FROM n, sel WHERE n.date >= date(sel.d, '-28 days') AND n.date < sel.d
       )
       SELECT sel.d AS woke,
-             d.sleep_score AS score, d.sleep_score - u.score AS score_change,
-             nullif(d.sleep_seconds, 0) AS asleep, nullif(d.sleep_seconds, 0) - u.asleep AS asleep_change,
-             s.need_minutes * 60 AS need, nullif(d.sleep_seconds, 0) - s.need_minutes * 60 AS need_gap,
-             substr(d.sleep_start, 12, 5) AS bedtime, substr(d.sleep_end, 12, 5) AS wake,
-             d.hrv_last_night_avg AS hrv, d.hrv_last_night_avg - u.hrv AS hrv_change
-      FROM sel LEFT JOIN days d ON d.date = sel.d LEFT JOIN garmin_sleep s ON s.date = sel.d, usual u
+             n.score, CASE WHEN u.n_score >= 3 THEN n.score - u.score END AS score_change,
+             upper(substr(s.quality, 1, 1)) || lower(substr(s.quality, 2)) AS score_word,
+             n.asleep, CASE WHEN u.n_asleep >= 3 THEN round((n.asleep - u.asleep) / 60) * 60 END AS asleep_change,
+             CASE WHEN s.need_minutes IS NOT NULL
+                  THEN printf('Need %d h %02d', s.need_minutes / 60, s.need_minutes % 60) END AS need_word,
+             n.bed, CASE WHEN u.n_bed >= 3 THEN round((n.bed - u.bed) / 60) * 60 END AS bed_change,
+             n.wake, CASE WHEN u.n_bed >= 3 THEN round((n.wake - u.wake) / 60) * 60 END AS wake_change,
+             n.hrv, CASE WHEN u.n_hrv >= 3 THEN n.hrv - u.hrv END AS hrv_change,
+             CASE WHEN n.hrv IS NULL THEN NULL
+                  WHEN s.hrv_status IS NULL OR upper(s.hrv_status) = 'NONE' THEN 'No baseline yet'
+                  ELSE upper(substr(s.hrv_status, 1, 1)) || lower(substr(replace(s.hrv_status, '_', ' '), 2)) END AS hrv_word,
+             s.body_battery_change AS charged
+      FROM sel LEFT JOIN n ON n.date = sel.d LEFT JOIN garmin_sleep s ON s.date = sel.d, usual u
 
-  # The night's stages in 5-minute steps: the height says how deep (deep 1, light 2, REM 3, awake 4).
+  # The night's stages as spans of time (kept for the most recent weeks).
   stages:
     sql: |
-      WITH RECURSIVE sel AS (
+      WITH sel AS (
         SELECT min(:day, (SELECT max(date) FROM days WHERE has_data = 1)) AS d
-      ),
-      night AS (
-        SELECT min(g.start) AS a, max(g.until) AS b FROM garmin_sleep_stages g, sel WHERE g.date = sel.d
-      ),
-      slots(t) AS (
-        SELECT a FROM night WHERE a IS NOT NULL
-        UNION ALL
-        SELECT strftime('%Y-%m-%d %H:%M', t, '+5 minutes') FROM slots, night
-        WHERE strftime('%Y-%m-%d %H:%M', t, '+5 minutes') < night.b
       )
-      SELECT substr(s.t, 12, 5) AS time,
-             max(CASE WHEN g.stage = 'deep' THEN 1 END) AS "Deep",
-             max(CASE WHEN g.stage = 'light' THEN 2 END) AS "Light",
-             max(CASE WHEN g.stage = 'rem' THEN 3 END) AS "REM",
-             max(CASE WHEN g.stage = 'awake' THEN 4 END) AS "Awake"
-      FROM slots s, sel
-      LEFT JOIN garmin_sleep_stages g ON g.date = sel.d AND g.start <= s.t AND s.t < g.until
-      GROUP BY s.t
-      ORDER BY s.t
+      SELECT g.start, g.until,
+             CASE g.stage WHEN 'deep' THEN 'Deep' WHEN 'light' THEN 'Light' WHEN 'rem' THEN 'REM'
+                          WHEN 'awake' THEN 'Awake' ELSE g.stage END AS stage
+      FROM garmin_sleep_stages g, sel
+      WHERE g.date = sel.d
+      ORDER BY g.start
 
   # What the score is made of, as Garmin rates each part.
   breakdown:
@@ -87,7 +90,7 @@ queries:
         UNION ALL SELECT 5, 'REM', printf('%d h %02d min · %d%%', rem / 3600, rem % 3600 / 60, rem_pct), rem_quality,
                printf('%g–%g%%', rem_ideal_low_pct, rem_ideal_high_pct) FROM n
         UNION ALL SELECT 6, 'Awake', printf('%d min, %d times', awake / 60, awake_count), awake_count_quality, NULL FROM n
-        UNION ALL SELECT 7, 'Restlessness', printf('%d restless moments', restless_moments), restlessness_quality, NULL FROM n
+        UNION ALL SELECT 7, 'Restlessness', printf('%d moments', restless_moments), restlessness_quality, NULL FROM n
         UNION ALL SELECT 8, 'Stress', printf('average %.0f', avg_stress), stress_quality, NULL FROM n
       )
       SELECT part, night,
@@ -133,7 +136,9 @@ queries:
       GROUP BY s.at
       ORDER BY s.at
 
-  # One row per night of the period, ending on the chosen night.
+  # One row per night of the period, ending on the chosen night. Stage and sleep times are in
+  # seconds; bedtime and wake time as in the night query. The 7-night
+  # average appears once 3 of the 7 nights have a score.
   nights:
     sql: |
       WITH sel AS (
@@ -143,43 +148,36 @@ queries:
         SELECT x.date, nullif(x.sleep_seconds, 0) AS asleep, x.sleep_score AS score,
                x.sleep_deep_seconds AS deep, x.sleep_light_seconds AS light, x.sleep_rem_seconds AS rem,
                x.sleep_awake_seconds AS awake, s.need_minutes AS need,
-               avg(x.sleep_score) OVER w AS score_7d,
+               avg(x.sleep_score) OVER w AS score_7d, count(x.sleep_score) OVER w AS n_7d,
+               round((julianday(x.sleep_start) - julianday(date(x.sleep_end, '-1 day'))) * 86400) AS bed,
+               round((julianday(x.sleep_end) - julianday(date(x.sleep_end, '-1 day'))) * 86400) AS wake,
                x.sleep_hr_avg, x.sleep_respiration_avg, x.sleep_spo2_avg, x.skin_temp_deviation_c
         FROM days x LEFT JOIN garmin_sleep s ON s.date = x.date
         WINDOW w AS (ORDER BY julianday(x.date) RANGE BETWEEN 6 PRECEDING AND CURRENT ROW)
-      )
-      SELECT n.date AS day,
-             round(n.deep / 3600.0, 2) AS "Deep", round(n.light / 3600.0, 2) AS "Light",
-             round(n.rem / 3600.0, 2) AS "REM", round(n.awake / 3600.0, 2) AS "Awake",
-             n.score AS "Sleep score", round(n.score_7d, 1) AS "7-day average",
-             round(n.asleep / 3600.0, 2) AS "Time asleep", round(n.need / 60.0, 2) AS "Sleep need",
-             n.sleep_hr_avg AS "Heart rate", n.sleep_respiration_avg AS "Breathing",
-             n.sleep_spo2_avg AS "Blood oxygen", n.skin_temp_deviation_c AS "Skin temperature"
-      FROM n, sel
-      WHERE n.date > date(sel.d, '-' || :days || ' days') AND n.date <= sel.d
-      ORDER BY n.date
+      ),
+      -- from the first night with sleep, so a new watch's first day leaves no empty slot
+      p AS (SELECT n.* FROM n, sel WHERE n.date > date(sel.d, '-' || :days || ' days') AND n.date <= sel.d
+              AND n.date >= (SELECT min(date) FROM days WHERE sleep_seconds > 0))
+      SELECT date AS day,
+             deep AS "Deep", light AS "Light", rem AS "REM", awake AS "Awake",
+             score AS "Sleep score", CASE WHEN n_7d >= 3 THEN round(score_7d, 1) END AS "7-night average",
+             asleep AS "Time asleep", round((SELECT avg(need) FROM p) / 5) * 300 AS need,
+             bed AS "Fell asleep", wake AS "Woke up",
+             sleep_hr_avg AS "Heart rate", sleep_respiration_avg AS "Breathing",
+             sleep_spo2_avg AS "Blood oxygen", skin_temp_deviation_c AS "Skin temperature"
+      FROM p
+      ORDER BY date
 
-  # Minutes later (+) or earlier (−) than your average bedtime and wake time over the period.
-  consistency:
+  # Naps in the period, from Garmin's Body Battery events.
+  naps:
     sql: |
       WITH sel AS (
         SELECT min(:day, (SELECT max(date) FROM days WHERE has_data = 1)) AS d
-      ),
-      n AS (
-        SELECT x.date,
-               -- minutes after noon, so a bedtime after midnight follows one before it
-               CASE WHEN x.sleep_start IS NOT NULL THEN
-                 (CAST(round((julianday(x.sleep_start) - julianday(date(x.sleep_start))) * 1440) AS INTEGER) + 720) % 1440 END AS bed,
-               CASE WHEN x.sleep_end IS NOT NULL THEN
-                 round((julianday(x.sleep_end) - julianday(date(x.sleep_end))) * 1440) END AS wake
-        FROM days x, sel
-        WHERE x.date > date(sel.d, '-' || :days || ' days') AND x.date <= sel.d
       )
-      SELECT date AS day,
-             round(bed - avg(bed) OVER ()) AS "Bedtime",
-             round(wake - avg(wake) OVER ()) AS "Wake time"
-      FROM n
-      ORDER BY date
+      SELECT e.date AS day, e.start, e.duration_seconds AS length, e.impact
+      FROM garmin_body_battery_events e, sel
+      WHERE e.type = 'nap' AND e.date > date(sel.d, '-' || :days || ' days') AND e.date <= sel.d
+      ORDER BY e.start DESC
 
   # The latest nights first.
   last_nights:
@@ -187,13 +185,12 @@ queries:
       WITH sel AS (
         SELECT min(:day, (SELECT max(date) FROM days WHERE has_data = 1)) AS d
       )
-      SELECT x.date AS day, substr(x.sleep_start, 12, 5) AS bed, substr(x.sleep_end, 12, 5) AS wake,
+      SELECT x.date AS day, x.sleep_start AS bed, x.sleep_end AS wake,
              nullif(x.sleep_seconds, 0) AS asleep, x.sleep_score AS score,
              upper(substr(s.quality, 1, 1)) || lower(substr(s.quality, 2)) AS quality,
-             x.sleep_deep_seconds AS deep, x.sleep_rem_seconds AS rem, x.hrv_last_night_avg AS hrv,
-             s.body_battery_change AS charged, x.nap_seconds AS nap
-      FROM days x LEFT JOIN garmin_sleep s ON s.date = x.date, sel
-      WHERE x.has_data = 1 AND x.date > date(sel.d, '-' || :days || ' days') AND x.date <= sel.d
+             x.hrv_last_night_avg AS hrv
+      FROM days x JOIN garmin_sleep s ON s.date = x.date, sel
+      WHERE x.date > date(sel.d, '-' || :days || ' days') AND x.date <= sel.d
       ORDER BY x.date DESC
 
 layout:
@@ -206,39 +203,34 @@ layout:
       value: score
       format: integer
       delta: score_change
-      delta_format: decimal1
+      delta_format: integer
       better: higher
-      hint: Out of 100, against your average for the 28 nights before.
+      note: score_word
     - type: stat
       title: Time asleep
-      class: sleep
+      class: [sleep, duration]
       query: night
       value: asleep
       format: duration
       delta: asleep_change
       better: higher
-      hint: Light, deep and REM sleep together, against your 28-night average.
-    - type: stat
-      title: Sleep need
-      class: sleep
-      query: night
-      value: need
-      format: duration
-      delta: need_gap
-      better: higher
-      hint: What Garmin thinks you needed; the small number is how far you slept above or below it.
+      note: need_word
     - type: stat
       title: Fell asleep
       class: sleep
       query: night
-      value: bedtime
-      hint: Local time.
+      value: bed
+      format: clock
+      delta: bed_change
+      delta_format: duration
     - type: stat
       title: Woke up
       class: sleep
       query: night
       value: wake
-      hint: Local time.
+      format: clock
+      delta: wake_change
+      delta_format: duration
     - type: stat
       title: Overnight HRV
       class: heart
@@ -246,33 +238,41 @@ layout:
       value: hrv
       format: integer
       delta: hrv_change
-      delta_format: decimal1
+      delta_format: integer
       better: higher
-      hint: Milliseconds, the night's average.
+      note: hrv_word
+      hint: Milliseconds
+    - type: stat
+      title: Body Battery charged
+      class: energy
+      query: night
+      value: charged
+      format: integer
+      hint: Points, while asleep
 
-  - - type: bar
+  - - type: timeline
       title: The night, stage by stage
       id: hypnogram
-      class: [sleep, stages]
+      class: [sleep, hypnogram]
       query: stages
-      x: time
-      y: [Deep, Light, REM, Awake]
-      format: integer
-      stacked: true
-      step: 1
-      readout: pointer
-
-  - - type: table
+      start: start
+      end: until
+      category: stage
+      order: [Awake, REM, Light, Deep]
+      hide_empty: true
+    - type: table
       title: What made the score
       id: breakdown
       class: sleep
       query: breakdown
+      hide_empty: true
       columns:
         - {column: part, label: Part}
         - {column: night, label: This night}
-        - {column: rating, label: Garmin's rating}
+        - {column: rating, label: Rating}
         - {column: ideal, label: Ideal}
-    - type: line
+
+  - - type: line
       title: Heart rate through the night
       id: overnight-heart
       class: heart
@@ -281,8 +281,8 @@ layout:
       y: Heart rate
       format: integer
       unit: bpm
-
-  - - type: line
+      hide_empty: true
+    - type: line
       title: HRV through the night
       id: overnight-hrv
       class: heart
@@ -291,6 +291,7 @@ layout:
       y: HRV
       format: integer
       unit: ms
+      hide_empty: true
     - type: line
       title: Breathing through the night
       id: overnight-breathing
@@ -300,8 +301,9 @@ layout:
       y: Breathing
       format: integer
       unit: /min
+      hide_empty: true
     - type: line
-      title: Body Battery and stress through the night
+      title: Body Battery and stress
       id: overnight-energy
       class: [energy, pair-energy-stress]
       query: overnight_energy
@@ -309,6 +311,7 @@ layout:
       y: [Body Battery, Stress]
       format: integer
       step: 25
+      hide_empty: true
 
   - - type: bar
       title: Sleep stages per night
@@ -317,34 +320,41 @@ layout:
       query: nights
       x: day
       y: [Deep, Light, REM, Awake]
-      format: decimal1
-      unit: h
+      format: duration
       stacked: true
+      hide_empty: true
     - type: line
-      title: Sleep score
-      class: [sleep, with-average]
+      title: When you slept
+      id: sleep-window
+      class: [sleep, pair-bed-wake]
       query: nights
       x: day
-      y: [Sleep score, 7-day average]
-      format: integer
+      y: [Fell asleep, Woke up]
+      format: clock
+      step: 7200
+      band: {low: Fell asleep, high: Woke up, label: Asleep}
+      hide_empty: true
 
   - - type: line
       title: Time asleep against your sleep need
+      id: asleep-need
+      class: sleep
+      query: nights
+      x: day
+      y: Time asleep
+      format: duration
+      reference: {column: need, label: Sleep need}
+      hide_empty: true
+    - type: line
+      title: Sleep score
+      id: score-nights
       class: [sleep, with-average]
       query: nights
       x: day
-      y: [Time asleep, Sleep need]
-      format: decimal1
-      unit: h
-    - type: line
-      title: Bedtime and wake time, against your average
-      id: consistency
-      class: [sleep, pair-bed-wake]
-      query: consistency
-      x: day
-      y: [Bedtime, Wake time]
+      y: [Sleep score, 7-night average]
+      dashed: 7-night average
       format: integer
-      unit: min
+      hide_empty: true
 
   - - type: line
       title: Heart rate asleep
@@ -354,6 +364,7 @@ layout:
       y: Heart rate
       format: decimal1
       unit: bpm
+      hide_empty: true
     - type: line
       title: Breathing asleep
       class: sleep
@@ -362,8 +373,8 @@ layout:
       y: Breathing
       format: decimal1
       unit: /min
-
-  - - type: line
+      hide_empty: true
+    - type: line
       title: Blood oxygen asleep
       class: sleep
       query: nights
@@ -371,6 +382,7 @@ layout:
       y: Blood oxygen
       format: decimal1
       unit: "%"
+      hide_empty: true
     - type: line
       title: Skin temperature
       class: sleep
@@ -379,36 +391,43 @@ layout:
       y: Skin temperature
       format: decimal1
       unit: °C
+      hide_empty: true
 
   - - type: table
-      title: Last nights
+      title: Nights
       class: sleep
       query: last_nights
       limit: 14
+      hide_empty: true
       columns:
         - {column: day, label: Woke up on, format: date}
-        - {column: bed, label: Asleep at}
-        - {column: wake, label: Awake at}
+        - {column: bed, label: Asleep, format: clock}
+        - {column: wake, label: Awake, format: clock}
         - {column: asleep, label: Time asleep, format: duration}
         - {column: score, label: Score, format: integer}
         - {column: quality, label: Rating}
-        - {column: deep, label: Deep, format: duration}
-        - {column: rem, label: REM, format: duration}
-        - {column: hrv, label: HRV (ms), format: integer}
-        - {column: charged, label: Body Battery +, format: integer}
-        - {column: nap, label: Nap, format: duration}
+    - type: table
+      title: Naps
+      class: sleep
+      query: naps
+      hide_empty: true
+      columns:
+        - {column: day, label: Day, format: date}
+        - {column: start, label: From, format: clock}
+        - {column: length, label: Length, format: duration}
+        - {column: impact, label: Body Battery +, format: integer}
 
   - - type: text
       class: notes
       body: |
-        **Reading the stages.** In the chart of the night each bar is five minutes; the taller
-        it is, the lighter the sleep: deep at the bottom, then light, REM, and awake at the top.
-        Garmin's ideal share of each stage is in the table next to it.
+        **Your usual** is your average over the nights before the one shown, up to 28; it needs 3
+        nights, and until then the readings stand alone, without arrows. The arrows under the
+        times say how much later (↗) or earlier (↘) than usual you fell asleep and woke up.
 
-        **Bedtime and wake time** show how many minutes later (above the line) or earlier
-        (below it) you fell asleep and woke up than your average for the period: a flat line is
-        a regular rhythm. Skin temperature is the difference from your own usual, in degrees.
+        **When you slept** shows each night from falling asleep (bottom line) to waking up (top
+        line): a flat band is a regular rhythm. Garmin's ideal share of each stage is in the table
+        next to the night. Skin temperature is the difference from your own usual, in degrees.
 
-        Sleep score, sleep need, stages and the ratings are **Garmin's own calculations**. A dash
-        means the watch has no reading for that night. The charts through the night are kept for
-        the most recent weeks only.
+        Sleep score, sleep need, stages and the ratings are **Garmin's own calculations**. A chart
+        appears once the watch has recorded what it shows; the charts through the night are kept
+        for the most recent weeks only.
