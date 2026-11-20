@@ -1,6 +1,6 @@
 # fitdata as a my-easy-software (mes) project: its apps, the tables they share and its dashboards.
 # Each app is a Python package with its own app.toml (its commands, jobs and data); the first one,
-# fitdata-garmin, lives in apps/fitdata_garmin/. Without mes, the same three jobs run as systemd user
+# fitdata-garmin, lives in apps/fitdata_garmin/. Without mes, the same four jobs run as systemd user
 # timers from systemd/ (see README, "Collect").
 
 [project]
@@ -115,7 +115,7 @@ accent = "#2a7f62"
 # (ui/dashboards/), the others come from fitdata-garmin (apps/fitdata_garmin/dashboards/).
 dashboards = ["overview", "sleep", "stress", "heart", "activity", "training", "body", "trends"]
 # Every job rebuilds the index, so the dashboard data is rebuilt after each of them.
-refresh_after = ["fitdata-garmin.activities", "fitdata-garmin.daily", "fitdata-garmin.backfill"]
+refresh_after = ["fitdata-garmin.activities", "fitdata-garmin.today", "fitdata-garmin.daily", "fitdata-garmin.backfill"]
 
 # Optional, only with storage = "bucket" in fitdata's config: the archive's raw and processed files
 # then live in a my-bucket-storage bucket (see README, "Storage"). fitdata reads its store location

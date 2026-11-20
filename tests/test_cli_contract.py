@@ -69,7 +69,7 @@ def test_describe_lists_the_jobs_of_app_toml(run):
     d = _describe(run)
     assert d["short"] == "garmin" and d["project"] == "fitdata" and d["title"] == "Garmin archive"
     jobs = {j["name"]: j for j in d["jobs"]}
-    assert set(jobs) == {"activities", "daily", "backfill"}
+    assert set(jobs) == {"activities", "today", "daily", "backfill"}
     assert jobs["backfill"]["id"] == "fitdata-garmin.backfill" and jobs["backfill"]["app"] == "fitdata-garmin"
     assert jobs["backfill"]["run"] == "backfill --max-days 90 --local" and jobs["backfill"]["trigger"] == "schedule"
     assert jobs["daily"]["schedule"] == "*-*-* 07,13,22:30:00" and jobs["daily"]["timeout"] == "30m"
@@ -83,7 +83,7 @@ def test_describe_applies_the_projects_settings(run, tmp_path, monkeypatch):
                        'jobs.activities.add_network = ["example.org"]\n')
     monkeypatch.setattr(describe, "PROJECT_TOML", project)
     jobs = {j["name"]: j for j in _describe(run)["jobs"]}
-    assert set(jobs) == {"activities", "daily"}  # backfill is switched off
+    assert set(jobs) == {"activities", "today", "daily"}  # backfill is switched off
     assert jobs["daily"]["schedule"] == "*-*-* 08:00:00" and jobs["daily"]["timeout"] == "45m"
     assert jobs["activities"]["network"][-1] == "example.org" and jobs["activities"]["memory"] == "512M"
 

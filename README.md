@@ -142,17 +142,18 @@ fitdata garmin sync       # last 3 days + their activities
 fitdata garmin backfill   # history, newest first, 60 days per run (resumable)
 ```
 
-It keeps itself current with three jobs:
+It keeps itself current with four jobs:
 
 | Job | Schedule | What it does |
 |---|---|---|
 | `activities` | every 10 min | new activities (`activities-sync --days 2`) |
-| `daily` | 07:30, 13:30, 22:30 | the last 3 days' health data (`sync --days 3`); sleep, HRV and readiness settle the next morning |
+| `today` | every 30 min | today's health data so far (`sync --days 1`), so the dashboards stay current |
+| `daily` | 07:30, 13:30, 22:30 | the last 3 days again (`sync --days 3`): late watch syncs, and sleep, HRV and readiness, which settle the next morning |
 | `backfill` | 02:15 | 90 more days of history until it's complete (`backfill --max-days 90`) |
 
 **With `mes`**, the jobs are `[jobs.*]` in the app's [`app.toml`](apps/fitdata_garmin/app.toml),
 each with the Garmin hosts it talks to, a memory cap and a time limit; `mes` installs and runs them
-as `fitdata-garmin.activities`, `fitdata-garmin.daily` and `fitdata-garmin.backfill`
+as `fitdata-garmin.activities`, `fitdata-garmin.today`, `fitdata-garmin.daily` and `fitdata-garmin.backfill`
 (`mes jobs ...`; a project can change a schedule or a limit with `[settings.fitdata-garmin]` in
 `project.toml`), and rebuilds the dashboard data after each one (`[ui] refresh_after`). After
 each `uv sync`, `mes apps sync` writes `apps.lock.json` (which apps the project has, where they are
@@ -163,7 +164,7 @@ installed on this machine; not committed). Without mes nothing needs it: the app
 
 ```sh
 cp systemd/* ~/.config/systemd/user/ && systemctl --user daemon-reload
-systemctl --user enable --now fitdata-activities.timer fitdata-daily.timer fitdata-backfill.timer
+systemctl --user enable --now fitdata-activities.timer fitdata-today.timer fitdata-daily.timer fitdata-backfill.timer
 loginctl enable-linger "$USER"     # keep timers running while logged out
 ```
 
@@ -341,7 +342,7 @@ live in different folders, so neither would see the other. If the machine runs *
 standalone, turn its timers off first, and stop the mes job timers while you move the data:
 
 ```sh
-systemctl --user disable --now fitdata-activities.timer fitdata-daily.timer fitdata-backfill.timer
+systemctl --user disable --now fitdata-activities.timer fitdata-today.timer fitdata-daily.timer fitdata-backfill.timer
 systemctl --user list-timers 'fitdata-*'                       # lists nothing
 sudo systemctl stop 'mes-fitdata.job.fitdata-garmin.*.timer'
 ```

@@ -32,9 +32,16 @@ network = ["connectapi.garmin.com", "connect.garmin.com", "diauth.garmin.com", "
 memory = "512M"
 timeout = "20m"
 
+[jobs.today]
+run = "sync --days 1 --local"
+schedule = "*:05/30"                     # every half hour: today's health data, so the dashboards stay current
+network = ["connectapi.garmin.com", "connect.garmin.com", "diauth.garmin.com", "sso.garmin.com"]
+memory = "512M"
+timeout = "20m"
+
 [jobs.daily]
 run = "sync --days 3 --local"
-schedule = "*-*-* 07,13,22:30:00"        # 07:30, 13:30 and 22:30: the last 3 days' health data
+schedule = "*-*-* 07,13,22:30:00"        # 07:30, 13:30 and 22:30: the last 3 days again (late watch syncs, corrections)
 network = ["connectapi.garmin.com", "connect.garmin.com", "diauth.garmin.com", "sso.garmin.com"]
 memory = "512M"
 timeout = "30m"

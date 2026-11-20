@@ -65,7 +65,7 @@ Guidelines:
 
 - This folder is the app package `fitdata_garmin` of the **fitdata** project. [`app.toml`](app.toml)
   declares it: its command (`fitdata-garmin`), its data (`[data]`: the `garmin/` folder, the
-  shared tables it writes and its own `garmin_*` tables), its three jobs (`[jobs.*]`, kept in step
+  shared tables it writes and its own `garmin_*` tables), its four jobs (`[jobs.*]`, kept in step
   with `systemd/`, which is the standalone way to run them; `tests/test_project.py` checks they
   match) and its dashboards (`[ui]`). It does not import mes; it answers `describe` in mes's shape.
 - Files:
