@@ -1,6 +1,6 @@
 /* One colour per family of measures, used the same way on every page: the dot before a reading's
    name, the edge of its panel and the lines of its charts. A component joins a family with its
-   class: setting (sleep, stress, energy, heart, activity, training, body, trend). */
+   class: setting (sleep, stress, energy, heart, activity, training, body). */
 
 .eui-app {
   --fd-sleep: #5a4fcf;
@@ -11,13 +11,8 @@
   --fd-awake: #e59a8c;
   --fd-stress: #c7780f;
   --fd-stress-soft: #e8b766;
-  --fd-rest: #5d97cf;
-  --fd-low: #ecbb68;
-  --fd-medium: #dc8530;
-  --fd-high: #b04a17;
   --fd-energy: #12867f;
   --fd-energy-soft: #7cc3bd;
-  --fd-drain: #d58450;
   --fd-heart: #c23a4b;
   --fd-heart-soft: #e59aa3;
   --fd-activity: #3a8a35;
@@ -26,8 +21,6 @@
   --fd-training-soft: #95aee0;
   --fd-body: #8f6a33;
   --fd-body-soft: #cdb187;
-  --fd-trend: var(--eui-accent);
-  --fd-compare: #9a4fb0;
   --fd-neutral: #a3a8ad;
 }
 
@@ -40,13 +33,8 @@
   --fd-awake: #f3b1a3;
   --fd-stress: #f2b54e;
   --fd-stress-soft: #a67a33;
-  --fd-rest: #7ab0e3;
-  --fd-low: #f3d08f;
-  --fd-medium: #eda054;
-  --fd-high: #e8763d;
   --fd-energy: #4fd3c4;
   --fd-energy-soft: #2f8c83;
-  --fd-drain: #eba27a;
   --fd-heart: #f2808d;
   --fd-heart-soft: #a14f5a;
   --fd-activity: #84d07a;
@@ -55,7 +43,6 @@
   --fd-training-soft: #4c69a0;
   --fd-body: #d5ad6c;
   --fd-body-soft: #8c7146;
-  --fd-compare: #d79cf0;
   --fd-neutral: #6f757c;
 }
 
@@ -67,8 +54,6 @@
 .eui-component.activity { --fd: var(--fd-activity); --fd-2: var(--fd-activity-soft); }
 .eui-component.training { --fd: var(--fd-training); --fd-2: var(--fd-training-soft); }
 .eui-component.body { --fd: var(--fd-body); --fd-2: var(--fd-body-soft); }
-.eui-component.trend { --fd: var(--fd-trend); --fd-2: var(--fd-neutral); }
-.eui-component.trend-compare { --fd: var(--fd-compare); --fd-2: var(--fd-neutral); }
 
 .eui-component.sleep,
 .eui-component.stress,
@@ -76,9 +61,7 @@
 .eui-component.heart,
 .eui-component.activity,
 .eui-component.training,
-.eui-component.body,
-.eui-component.trend,
-.eui-component.trend-compare {
+.eui-component.body {
   --eui-chart-1: var(--fd);
   --eui-chart-2: var(--fd-2);
   --eui-chart-3: var(--fd-neutral);
@@ -88,10 +71,7 @@
 /* Charts whose series belong to different families or stages. */
 .eui-component.pair-energy-stress { --eui-chart-1: var(--fd-energy); --eui-chart-2: var(--fd-stress-soft); }
 .eui-component.pair-bed-wake { --eui-chart-1: var(--fd-sleep); --eui-chart-2: var(--fd-stress); }
-.eui-component.pair-charge { --eui-chart-1: var(--fd-energy); --eui-chart-2: var(--fd-drain); }
 .eui-component.pair-intensity { --eui-chart-1: var(--fd-activity-soft); --eui-chart-2: var(--fd-activity); }
-.eui-component.pair-calories { --eui-chart-1: var(--fd-neutral); --eui-chart-2: var(--fd-activity); }
-.eui-component.pair-sports { --eui-chart-1: var(--fd-training); --eui-chart-2: var(--fd-energy); }
 /* Sleep stages: deep at the bottom of a stacked bar (its first series) ... */
 .eui-component.stages {
   --eui-chart-1: var(--fd-deep);
@@ -106,26 +86,12 @@
   --eui-chart-3: var(--fd-light);
   --eui-chart-4: var(--fd-deep);
 }
-/* Garmin's stress levels, in the order the queries give them (rest, low, medium, high, moving). */
-.eui-component.bands {
-  --eui-chart-1: var(--fd-rest);
-  --eui-chart-2: var(--fd-low);
-  --eui-chart-3: var(--fd-medium);
-  --eui-chart-4: var(--fd-high);
-  --eui-chart-5: var(--fd-neutral);
-}
-.eui-component.three-levels { --eui-chart-1: var(--fd-activity); --eui-chart-2: var(--fd-activity-soft); --eui-chart-3: var(--fd-neutral); }
+/* The four groups of sports of a week's training time. */
 .eui-component.sports {
   --eui-chart-1: var(--fd-training);
   --eui-chart-2: var(--fd-energy);
   --eui-chart-3: var(--fd-activity);
   --eui-chart-4: var(--fd-neutral);
-}
-/* The three kinds of training load Garmin balances over four weeks. */
-.eui-component.load-focus {
-  --eui-chart-1: var(--fd-high);
-  --eui-chart-2: var(--fd-training);
-  --eui-chart-3: var(--fd-training-soft);
 }
 /* Averages next to the reading they smooth: the family's soft colour, drawn dashed (dashed:). */
 .eui-component.with-average { --eui-chart-2: var(--fd-2); }

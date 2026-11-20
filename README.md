@@ -268,29 +268,26 @@ With `--json`, errors are one JSON line on stderr: `{"error", "kind", "exit_code
 
 ## Dashboards
 
-Eight web pages, shown by **[my-easy-ui](https://github.com/josep-reyero/my-easy-ui)**. Each one
-answers one question, leads with the chosen day's few numbers, each with Garmin's word for it and
-an arrow against your usual (the average of the days before it, once there are 3), then shows the
-detail, from a phone to a wide screen:
+Four web pages, shown by **[my-easy-ui](https://github.com/josep-reyero/my-easy-ui)**. Each one
+answers one question and leads with the chosen day's few numbers, each with Garmin's word for it
+and an arrow against your usual (the average of the days before it, once there are 3), then a few
+charts, from a phone to a wide screen:
 
 | Page | The question |
 |---|---|
-| **Today** | How ready am I, how did I sleep, how is the day going? |
-| **Sleep** | How long and how well did I sleep, stage by stage, and what shaped the score? |
-| **Stress and energy** | How stressful was the day, what charged and drained my Body Battery? |
-| **Heart and HRV** | Is my resting heart rate where it usually is, is my HRV inside its baseline? |
-| **Activity** | Steps, intensity minutes, floors and calories against their goals. |
-| **Training** | Am I ready to train, is my load in its optimal range, is my fitness moving? |
-| **Body** | Weight, body fat, fitness age, water and heat acclimation. |
-| **Trends** | Any measure day by day, or per week or month, next to a second one. |
+| **Today** | How is my day? Sleep, HRV, resting heart rate, readiness, Body Battery, stress and steps; last night and the day hour by hour. |
+| **Sleep** | How did I sleep last night, and how have my nights gone? |
+| **Health** | Are my stress, Body Battery, resting heart rate, HRV and weight where they usually are? |
+| **Workouts** | What did I do, and how is training going? Recent workouts, time per week and by sport, load, VO2 max, steps and intensity minutes. |
 
 **Today** is the project's own page ([`ui/dashboards/overview.yaml`](ui/dashboards/overview.yaml)),
 where fitdata-garmin adds its readings and charts; the others come with the app
 ([`apps/fitdata_garmin/dashboards/`](apps/fitdata_garmin/dashboards/)). They read the shared
-`days` and `activities` views and the app's `garmin_*` tables. The pages work from the first
-days of a new watch: charts span the days there are, averages say how many days they are over,
-arrows wait for a usual, and a part that needs data the archive does not have yet (activities,
-weigh-ins, an HRV baseline) stays out of the page, with one line saying what will appear there.
+`days` and `activities` views and the app's `garmin_*` tables. Each page has a Day control, and
+Sleep, Health and Workouts a Period, from 2 weeks to a year. The pages work from the first
+days of a new watch: charts span the days there are, arrows wait for a usual, and a part that
+needs data the archive does not have yet (workouts, weigh-ins, an HRV baseline) stays out of the
+page, with one line saying what will appear there.
 The project's look (one colour per family of measures, light and dark) is
 [`ui/theme.yaml`](ui/theme.yaml) and [`ui/styles/`](ui/styles/). See [`ui/README.md`](ui/README.md)
 for previewing them with made-up sample data and pointing them at your archive.
@@ -298,20 +295,17 @@ for previewing them with made-up sample data and pointing them at your archive.
 | | |
 |---|---|
 | ![Today](ui/screenshots/overview.png) | ![Sleep](ui/screenshots/sleep.png) |
-| ![Stress and energy](ui/screenshots/stress.png) | ![Heart and HRV](ui/screenshots/heart.png) |
-| ![Activity](ui/screenshots/activity.png) | ![Training](ui/screenshots/training.png) |
-| ![Body](ui/screenshots/body.png) | ![Trends](ui/screenshots/trends.png) |
-| ![Sleep, dark](ui/screenshots/sleep-dark.png) | ![Today with a new watch: five days, no activities yet](ui/screenshots/overview-new-watch.png) |
-| ![Training with a new watch: one line instead of empty panels](ui/screenshots/training-new-watch.png) | ![Today on a wide screen](ui/screenshots/overview-wide.png) |
+| ![Health](ui/screenshots/health.png) | ![Workouts](ui/screenshots/workouts.png) |
+| ![Health, dark](ui/screenshots/health-dark.png) | ![Workouts with a new watch: no workouts yet, the training numbers already there](ui/screenshots/workouts-new-watch.png) |
 
 <p>
-<img src="ui/screenshots/overview-phone-dark.png" alt="Today on a phone, dark" width="195">
-<img src="ui/screenshots/heart-phone-dark.png" alt="Heart and HRV on a phone, dark" width="195">
-<img src="ui/screenshots/stress-phone.png" alt="Stress and energy on a phone" width="195">
-<img src="ui/screenshots/body-new-watch-phone.png" alt="Body on a phone with a new watch: nothing logged yet" width="195">
+<img src="ui/screenshots/overview-phone.png" alt="Today on a phone" width="195">
+<img src="ui/screenshots/sleep-phone-dark.png" alt="Sleep on a phone, dark" width="195">
+<img src="ui/screenshots/workouts-phone.png" alt="Workouts on a phone" width="195">
+<img src="ui/screenshots/health-new-watch-phone.png" alt="Health on a phone with a new watch" width="195">
 </p>
 
-![Heart and HRV on a wide screen, dark](ui/screenshots/heart-wide-dark.png)
+![Today on a wide screen](ui/screenshots/overview-wide.png)
 
 The screenshots show the made-up samples in `ui/fixtures/` (120 days, and a new watch's first 5
 days), never anyone's real numbers.

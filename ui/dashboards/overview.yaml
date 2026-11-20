@@ -1,8 +1,7 @@
 spec: easy-ui/v1
 title: Today
 description: >-
-  How ready you are, how you slept and how the day is going. Each small arrow compares the day
-  with your usual: your average over the days before it (up to 28), once there are at least 3.
+  The day at a glance: how you slept, how ready you are and how the day is going.
 
 params:
   day:
@@ -51,9 +50,9 @@ layout:
       query: shown
       value: line
 
-  # Each app adds what it measures here: fitdata-garmin its readiness, sleep, Body Battery, heart
-  # and activity readings (apps/fitdata_garmin/dashboards/overview-garmin.yaml) ...
+  # Each app adds what it measures here: fitdata-garmin its headline readings
+  # (apps/fitdata_garmin/dashboards/overview-garmin.yaml) ...
   - anchor: readings
 
-  # ... and how the night and the day went, hour by hour.
-  - anchor: trends
+  # ... and the night and the day, hour by hour.
+  - anchor: charts

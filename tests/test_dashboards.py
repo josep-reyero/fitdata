@@ -1,9 +1,8 @@
 """The fitness dashboards and their synthetic sample data (ui/fixtures/).
 
 The project's Today page is ui/dashboards/overview.yaml, with anchors where fitdata-garmin adds its
-sections (apps/fitdata_garmin/dashboards/overview-garmin.yaml); Sleep, Stress and energy, Heart and
-HRV, Activity, Training, Body and Trends are fitdata-garmin's own dashboards
-(apps/fitdata_garmin/dashboards/). The dashboards read the project's shared views, days and
+sections (apps/fitdata_garmin/dashboards/overview-garmin.yaml); Sleep, Health and Workouts are
+fitdata-garmin's own dashboards (apps/fitdata_garmin/dashboards/). The dashboards read the project's shared views, days and
 activities, and fitdata-garmin's garmin_* tables listed in its [ui] tables.
 
 Most tests need only fitdata: they compose the dashboards as the apps contract says
@@ -38,7 +37,7 @@ REPO = Path(__file__).resolve().parents[1]
 FIXTURE = REPO / "ui" / "fixtures" / "fitdata-sample.db"
 NEW_WATCH = REPO / "ui" / "fixtures" / "new-watch" / "fitdata-new-watch.db"
 MAKE_FIXTURE = REPO / "ui" / "fixtures" / "make_fixture.py"
-SLUGS = ("overview", "sleep", "stress", "heart", "activity", "training", "body", "trends")
+SLUGS = ("overview", "sleep", "health", "workouts")
 SHARED = ("days", "activities")
 GARMIN = ("garmin_sleep", "garmin_daily", "garmin_training", "garmin_body_battery_events", "garmin_samples",
           "garmin_sleep_stages")
@@ -159,14 +158,12 @@ def test_the_overview_is_todays_page_once_composed():
     assert warnings == [] and placed == [
         {"app": "fitdata-garmin", "id": "garmin-readings", "file": "apps/fitdata_garmin/dashboards/overview-garmin.yaml",
          "placed": "after:readings"},
-        {"app": "fitdata-garmin", "id": "garmin-trends", "file": "apps/fitdata_garmin/dashboards/overview-garmin.yaml",
-         "placed": "after:trends"}]
-    assert list(dash["queries"]) == ["shown", "garmin_today", "garmin_usual", "garmin_night", "garmin_day_energy",
-                                     "garmin_day_heart", "garmin_last_activities"]
+        {"app": "fitdata-garmin", "id": "garmin-charts", "file": "apps/fitdata_garmin/dashboards/overview-garmin.yaml",
+         "placed": "after:charts"}]
+    assert list(dash["queries"]) == ["shown", "garmin_today", "garmin_night", "garmin_day_energy", "garmin_day_heart"]
     assert not any(isinstance(r, dict) for r in dash["layout"])  # the anchors are gone
     shape = [[c["type"] for c in row] for row in dash["layout"]]
-    assert shape == [["controls", "stat"], ["stat"] * 6, ["stat"] * 5, ["timeline", "line", "line"],
-                     ["table", "table"], ["text"]]
+    assert shape == [["controls", "stat"], ["stat"] * 4, ["stat"] * 4, ["timeline", "line", "line"], ["text"]]
     queries = {c.get("query") for row in dash["layout"] for c in row} - {None}
     assert queries == set(dash["queries"])
 
@@ -179,7 +176,7 @@ def compose_dashboards_raw(slug: str) -> dict:
 def test_the_project_overview_alone_shows_only_shared_data():
     """Without the app's sections, the project's page still works: it reads only shared views."""
     raw = compose_dashboards_raw("overview")
-    assert [r for r in raw["layout"] if isinstance(r, dict)] == [{"anchor": "readings"}, {"anchor": "trends"}]
+    assert [r for r in raw["layout"] if isinstance(r, dict)] == [{"anchor": "readings"}, {"anchor": "charts"}]
     assert list(raw["queries"]) == ["shown"]
     words = set(re.findall(r"[a-z_]+", raw["queries"]["shown"]["sql"].lower()))
     assert not words & set(GARMIN)
@@ -272,13 +269,12 @@ def _choices(slug: str) -> list[dict]:
     return out
 
 
-# Queries that return no rows on purpose with each sample: a page's "nothing yet" line once there
-# is something, and the panels (all hide_empty) that need what a new watch does not have yet.
+# Queries that return no rows on purpose with each sample: the "no workouts" lines once there are
+# workouts, and the panels (all hide_empty) that need what a new watch does not have yet.
 EMPTY = {
-    FIXTURE: {"training.no_activities", "body.nothing_yet"},
-    NEW_WATCH: {"overview.garmin_last_activities", "sleep.naps", "training.balance", "training.races",
-                "training.weekly", "training.by_sport", "training.recent", "body.latest", "body.fitness_age_now",
-                "body.weight", "body.body_fat", "body.fitness_age", "body.hydration", "body.acclimation"},
+    FIXTURE: {"workouts.no_workouts", "workouts.none_in_period"},
+    NEW_WATCH: {"workouts.none_in_period", "workouts.recent", "workouts.weekly", "workouts.by_sport", "workouts.load",
+                "health.body", "health.weight"},
 }
 
 
@@ -294,39 +290,45 @@ def test_every_query_has_rows_on_the_latest_day_for_every_period(slug, db):
 
 
 def test_a_page_without_anything_to_show_says_what_will_appear():
-    """Training without activities and Body without weigh-ins: one friendly line, and every other
-    panel of the page is left out (hide_empty), so no rows of dashes."""
-    for slug, line in (("training", "no_activities"), ("body", "nothing_yet")):
-        r = _run(slug, NEW_WATCH)
-        assert len(r[line]["rows"]) == 1
-        assert ("Start one from the watch" if slug == "training" else "Garmin Connect") in r[line]["rows"][0][0]
-        assert _run(slug)[line]["rows"] == []  # the sample has activities and weigh-ins
-        dash, _, _ = compose(REPO, slug)
-        for row in dash["layout"][1:]:
-            for c in row:
-                if c["type"] not in ("controls", "text"):
-                    assert c.get("hide_empty") is True, (slug, c.get("title"))
-    body = _run("body", NEW_WATCH)
-    assert [n for n, r in body.items() if r["rows"]] == ["nothing_yet"]
+    """Workouts without any workout: one friendly line, the training numbers Garmin already has, and
+    every other panel of the page left out (hide_empty), so no rows of dashes. Health leaves its
+    body measures out until something is logged."""
+    r = _run("workouts", NEW_WATCH)
+    assert len(r["no_workouts"]["rows"]) == 1 and r["none_in_period"]["rows"] == []
+    assert r["no_workouts"]["rows"][0][0].startswith("Start an activity on the watch")
+    assert _one(r["today"])["ready"] is not None  # readiness needs only sleep
+    assert _run("workouts")["no_workouts"]["rows"] == []  # the sample has workouts
+    dash, _, _ = compose(REPO, "workouts")
+    for row in dash["layout"][1:]:
+        for c in row:
+            if c["type"] not in ("controls", "text"):
+                assert c.get("hide_empty") is True, c.get("title")
+    health, _, _ = compose(REPO, "health")
+    body = [c for row in health["layout"] for c in row if c.get("query") in ("body", "weight")]
+    assert len(body) == 3 and all(c.get("hide_empty") is True for c in body)
+
+
+def test_a_period_without_workouts_says_so():
+    """Workouts exist, but none in the chosen period: one line, not an empty page."""
+    early = "2026-01-04"  # the day before the sample starts: its workouts are all later
+    r = _run("workouts", day=early)
+    assert r["recent"]["rows"] == [] and r["no_workouts"]["rows"] == []
+    assert r["none_in_period"]["rows"] == [("Choose a longer Period to see earlier ones.",)]
 
 
 def test_a_new_watch_has_no_arrows_until_there_is_a_usual():
-    """With fewer than 3 earlier days, nothing is compared: no arrow, and the table says so."""
+    """With fewer than 3 earlier days, nothing is compared: no arrow."""
     early = _one(_run("overview", NEW_WATCH, day="2026-05-02")["garmin_today"])
     assert early["score"] is not None and early["score_change"] is None and early["rhr_change"] is None
     assert early["hrv_word"] == "No baseline yet"
     later = _one(_run("overview", NEW_WATCH)["garmin_today"])
     assert later["rhr_change"] is not None  # 4 earlier days
-    usual = {u["measure"]: u for u in _all(_run("overview", NEW_WATCH, day="2026-05-02")["garmin_usual"])}
-    assert usual["Sleep score"]["usual_value"] is None and usual["Sleep score"]["compared"] is None
-    assert usual["Sleep score"]["usual"] == "needs 3 days, 1 so far"
-    assert usual["Sleep score"]["based_on"] == "1 so far (3 needed)"
-    assert usual["Resting heart rate"]["based_on"] == "2 so far (3 needed)"
-    assert all(u["based_on"].endswith("so far") for u in _all(_run("overview", NEW_WATCH)["garmin_usual"]))
-    heart = _one(_run("heart", NEW_WATCH)["today"])
-    assert heart["baseline_word"] is None and heart["hrv_word"] == "No baseline yet"
-    daily = _all(_run("heart", NEW_WATCH)["daily"])
-    assert all(d["28-day average"] is None for d in daily)  # not a 28-day average of 5 days
+    night = _one(_run("sleep", NEW_WATCH, day="2026-05-02")["night"])
+    assert night["bed_change"] is None and night["bed_word"] is None
+    health = _one(_run("health", NEW_WATCH)["today"])
+    assert health["hrv_word"] == "No baseline yet"
+    daily = _all(_run("health", NEW_WATCH)["daily"])
+    assert all(d["baseline_low"] is None for d in daily)  # no band before Garmin has a baseline
 
 
 def test_charts_of_days_start_with_the_data():
@@ -334,12 +336,12 @@ def test_charts_of_days_start_with_the_data():
     and the nights start with the first night."""
     nights = _all(_run("sleep", NEW_WATCH, days=365)["nights"])
     assert [n["day"] for n in nights] == ["2026-05-01", "2026-05-02", "2026-05-03", LATEST]
-    for slug, name in (("stress", "daily"), ("activity", "daily"), ("heart", "daily"), ("trends", "periods")):
+    for slug, name in (("health", "daily"), ("workouts", "steps")):
         days = [r[0] for r in _run(slug, NEW_WATCH)[name]["rows"]]
         assert days[0] >= "2026-04-30" and len(days) <= 5, (slug, name)
 
 
-@pytest.mark.parametrize("slug", [s for s in SLUGS if s not in ("body", "trends")])
+@pytest.mark.parametrize("slug", SLUGS)
 @pytest.mark.parametrize("day", [NO_WATCH, OLD_DAY, "2026-03-23", "2020-01-01"])
 def test_a_day_without_data_shows_empty_panels_not_zeros(slug, day):
     """A day the watch was not worn, one before the window kept through the day, one missing from
@@ -349,12 +351,11 @@ def test_a_day_without_data_shows_empty_panels_not_zeros(slug, day):
         row = _one(r["garmin_today"])
         assert row["steps"] in (None, 0) or day == OLD_DAY
     if day != OLD_DAY:
-        for name in {"overview": ("garmin_day_energy", "garmin_day_heart"), "sleep": ("stages", "overnight"),
-                     "stress": ("through_the_day",), "heart": ("through_the_day",),
-                     "activity": ("through_the_day",)}.get(slug, ()):
+        for name in {"overview": ("garmin_day_energy", "garmin_day_heart", "garmin_night"), "sleep": ("stages",),
+                     "health": ("through_the_day",)}.get(slug, ()):
             assert r[name]["rows"] == [], (slug, name)
     else:  # daily numbers yes, but nothing through the day
-        for name in {"sleep": ("stages",), "stress": ("through_the_day",)}.get(slug, ()):
+        for name in {"sleep": ("stages",), "health": ("through_the_day",)}.get(slug, ()):
             assert r[name]["rows"] == [], (slug, name)
 
 
@@ -374,9 +375,8 @@ def test_today_against_the_usual():
     assert row["ready"] == ready and row["ready_change"] == pytest.approx(ready - sum(before) / len(before))
     rhr, = _rows(FIXTURE, "SELECT resting_hr FROM days WHERE date = ?", LATEST)[0]
     assert row["rhr"] == rhr
-    usual = {u["measure"]: u for u in _all(r["garmin_usual"])}
-    assert set(usual) >= {"Training readiness", "Sleep score", "Resting heart rate", "Steps"}
-    assert all(re.match(r"^(↑|↓|→)", u["compared"]) for u in usual.values() if u["compared"])
+    asleep, = _rows(FIXTURE, "SELECT sleep_seconds FROM days WHERE date = ?", LATEST)[0]
+    assert row["asleep"] == asleep and row["steps_word"].startswith("Goal ")
 
 
 def test_sleep_night_matches_the_index():
@@ -409,38 +409,38 @@ def test_sleep_nights_skip_missing_ones(days):
     assert all(n["Deep"] is None for n in missing)  # not 0
 
 
-def test_stress_levels_add_up_to_the_day():
-    r = _run("stress")
-    levels = {x["level"]: x["Time"] for x in _all(r["levels"])}
-    assert list(levels) == ["Rest", "Low", "Medium", "High", "Moving"]  # a fixed order keeps the colours
-    secs = _rows(FIXTURE, "SELECT stress_rest_seconds + stress_low_seconds + stress_medium_seconds + "
-                          "stress_high_seconds + coalesce(stress_activity_seconds, 0) FROM garmin_daily WHERE date = ?",
-                 LATEST)[0][0]
-    assert sum(v or 0 for v in levels.values()) == pytest.approx(secs, abs=60)
-
-
-def test_heart_baseline_and_status():
-    row = _one(_run("heart")["today"])
+def test_health_body_battery_inside_its_range_and_hrv_baseline():
+    r = _run("health", days=90)
+    daily = _all(r["daily"])
+    assert daily and all(d["bb_low"] <= d["Body Battery at wake"] <= d["bb_high"] for d in daily
+                         if d["Body Battery at wake"] is not None and d["bb_low"] is not None)
+    row = _one(r["today"])
     low, high, status = _rows(FIXTURE, "SELECT g.hrv_baseline_low, g.hrv_baseline_high, s.hrv_status "
                                        "FROM garmin_daily g LEFT JOIN garmin_sleep s USING (date) WHERE date = ?",
                               LATEST)[0]
-    assert row["baseline_word"] == f"Baseline {low}–{high}" and row["hrv_word"].lower() == (status or "").lower().replace("_", " ")
+    assert row["hrv_word"].lower() == (status or "").lower().replace("_", " ")
+    assert (daily[-1]["baseline_low"], daily[-1]["baseline_high"]) == (low, high)
 
 
-def test_activity_leaves_the_day_in_progress_out_of_averages():
-    r = _run("activity", days=30)
-    period = _one(r["period"])
-    steps = [s for (s,) in _rows(FIXTURE, "SELECT steps FROM days WHERE has_data = 1 AND steps > 0 AND date < ? "
-                                          "AND date > date(?, '-30 days')", LATEST, LATEST)]
-    assert period["step_days"] == len(steps) and period["steps"] == pytest.approx(sum(steps) / len(steps))
-    daily = _all(r["daily"])
-    assert [d["in_progress"] for d in daily].count(1) <= 1
-    weeks = [w["week"] for w in _all(r["weekly"])]
+def test_health_body_shows_only_logged_days():
+    r = _run("health", days=365)
+    assert len(r["weight"]["rows"]) == _rows(FIXTURE, "SELECT count(*) FROM days WHERE weight_kg IS NOT NULL")[0][0]
+    body = _one(r["body"])
+    weight, fat = _rows(FIXTURE, "SELECT weight_kg, body_fat_pct FROM days WHERE weight_kg IS NOT NULL "
+                                 "ORDER BY date DESC LIMIT 1")[0]
+    assert body["weight"] == weight and (f"{fat:.1f}% fat" in body["weight_word"]) == (fat is not None)
+
+
+def test_workouts_steps_and_intensity_minutes():
+    r = _run("workouts", days=30)
+    steps = _all(r["steps"])
+    assert [d["in_progress"] for d in steps].count(1) <= 1 and all(d["Steps"] != 0 for d in steps)
+    weeks = [w["week"] for w in _all(r["intensity"])]
     assert weeks == sorted(weeks) and all(dt.date.fromisoformat(w).weekday() == 0 for w in weeks)
 
 
-def test_training_weeks_and_activities_add_up():
-    r = _run("training", days=365)
+def test_workouts_weeks_and_sports_add_up():
+    r = _run("workouts", days=365)
     acts = _rows(FIXTURE, "SELECT duration_s FROM activities WHERE date > date(?, '-365 days') AND date <= ?",
                  LATEST, LATEST)
     assert len(r["recent"]["rows"]) == len(acts)
@@ -448,55 +448,15 @@ def test_training_weeks_and_activities_add_up():
     seconds = sum(w["Running"] + w["Cycling"] + w["Walking and hiking"] + w["Other"] for w in weekly)
     assert seconds == pytest.approx(sum(a for (a,) in acts), abs=1)
     by_sport = _all(r["by_sport"])
-    assert [s["sport"] for s in by_sport] == ["Running", "Cycling", "Walking and hiking", "Other"]
-    assert sum(s["Time"] for s in by_sport) == pytest.approx(seconds, abs=1)
+    assert sum(s["time"] for s in by_sport) == pytest.approx(seconds, abs=1)
+    assert sum(s["workouts"] for s in by_sport) == len(acts)
+    assert [s["time"] for s in by_sport] == sorted((s["time"] for s in by_sport), reverse=True)
     assert weekly[0]["week"] >= "2026-01-05"  # no made-up weeks before the archive
     recent = _all(r["recent"])
-    strength = [x for x in recent if x["kind"] == "Strength training"]
-    assert strength and all(x["distance"] is None and x["pace"] is None for x in strength)
-    runs = [x for x in recent if x["kind"] == "Running"]
-    assert runs and all(240 < x["pace"] < 480 for x in runs)  # seconds per km
-    factors = _all(r["factors"])
-    assert factors and all(0 <= f["pct"] <= 1 for f in factors if f["pct"] is not None)
-
-
-def test_body_shows_only_logged_days():
-    r = _run("body", days=1095)
-    assert len(r["weight"]["rows"]) == _rows(FIXTURE, "SELECT count(*) FROM days WHERE weight_kg IS NOT NULL")[0][0]
-    assert all(x["Water"] > 0 for x in _all(r["hydration"]))
-
-
-def _metrics() -> list[str]:
-    dash, _, _ = compose(REPO, "trends")
-    return [o["value"] for o in dash["params"]["metric"]["options"]]
-
-
-@pytest.mark.parametrize("grain", ["day", "week", "month"])
-@pytest.mark.parametrize("metric", _metrics())
-def test_trends_every_measure_by_day_week_and_month(metric, grain):
-    r = _run("trends", metric=metric, compare=metric, grain=grain, days=365)
-    periods = _all(r["periods"])
-    if grain == "day":
-        assert all(p["lowest"] is None and p["highest"] is None for p in periods)  # no band for one day
-    else:
-        assert periods and all(p["lowest"] <= p["Reading"] <= p["highest"] for p in periods if p["days"])
-    assert [p["period"] for p in periods] == sorted({p["period"] for p in periods})
-    assert periods[0]["period"] >= {"day": "2026-01-05", "week": "2026-01-05", "month": "2026-01-01"}[grain]
-    assert all(p["Reading"] == p["Next to it"] for p in periods)
-    summary = _one(r["summary"])
-    assert summary["measure"] and summary["days"] == sum(p["days"] for p in periods) > 0
-    assert summary["lowest"] <= summary["average"] + 0.05 and summary["average"] <= summary["highest"] + 0.05
-
-
-def test_trends_days_without_a_reading_are_left_out():
-    r = _run("trends", metric="resting_hr", grain="month", days=365)
-    jan = _all(r["periods"])[0]
-    values = [v for (v,) in _rows(FIXTURE, "SELECT resting_hr FROM days WHERE date LIKE '2026-01-%' "
-                                           "AND resting_hr IS NOT NULL")]
-    assert jan["days"] == len(values) and jan["Reading"] == pytest.approx(sum(values) / len(values), abs=0.01)
-    # Steps: the latest day, still in progress, is not counted.
-    steps = _one(_run("trends", metric="steps", days=365)["summary"])
-    assert steps["days"] == _rows(FIXTURE, "SELECT count(*) FROM days WHERE steps > 0 AND date < ?", LATEST)[0][0]
+    strength = [x for x in recent if x["sport"] == "Strength training"]
+    assert strength and all(x["distance"] is None for x in strength)
+    today = _one(r["today"])
+    assert today["acute_word"].startswith("Optimal ") and today["status"]
 
 
 def test_dashboards_cope_with_an_empty_archive(tmp_path):
@@ -516,7 +476,7 @@ def test_dashboards_cope_with_an_empty_archive(tmp_path):
 
 
 def test_dashboards_show_a_second_apps_days_and_activities(tmp_path):
-    """The shared views at work: another app's activity shows on the Training page without any
+    """The shared views at work: another app's activity shows on the Workouts page without any
     change to the dashboards."""
     from schema_script import schema_sql
     two = tmp_path / "two.sqlite"
@@ -528,15 +488,15 @@ def test_dashboards_show_a_second_apps_days_and_activities(tmp_path):
                 "VALUES ('fitdata-strava', 1, ?, 'road_biking', 3600, 30000, ? || ' 08:00:00')", (LATEST, LATEST))
     con.commit()
     con.close()
-    before = _run("training", days=30)["recent"]["rows"]
-    after = _run("training", two, days=30)["recent"]["rows"]
+    before = _run("workouts", days=30)["recent"]["rows"]
+    after = _run("workouts", two, days=30)["recent"]["rows"]
     assert len(after) == len(before) + 1 and after[0][0] == LATEST
 
 
 def test_health_changes_say_which_way_is_good():
     """A higher resting heart rate must not look like good news: every delta says which way is
-    better, except the few where neither way is (load against the usual, weight, a chosen measure)."""
-    neutral = {("sleep", "bed_change"), ("sleep", "wake_change"), ("body", "weight_change"), ("trends", "change")}
+    better, except the few where neither way is (bedtime, wake time, weight)."""
+    neutral = {("sleep", "bed_change"), ("sleep", "wake_change"), ("health", "weight_change")}
     for slug in SLUGS:
         dash, _, _ = compose(REPO, slug)
         for row in dash["layout"]:
@@ -544,9 +504,9 @@ def test_health_changes_say_which_way_is_good():
                 if "delta" in c:
                     want = (None,) if (slug, c["delta"]) in neutral else ("higher", "lower")
                     assert c.get("better") in want, (slug, c.get("title"))
-    rhr = [c for row in compose(REPO, "heart")[0]["layout"] for c in row if c.get("delta") == "rhr_change"]
+    rhr = [c for row in compose(REPO, "health")[0]["layout"] for c in row if c.get("delta") == "rhr_change"]
     assert rhr and rhr[0]["better"] == "lower"
-    stress = [c for row in compose(REPO, "stress")[0]["layout"] for c in row if c.get("delta") == "stress_change"]
+    stress = [c for row in compose(REPO, "health")[0]["layout"] for c in row if c.get("delta") == "stress_change"]
     assert stress and stress[0]["better"] == "lower"
 
 
@@ -590,7 +550,7 @@ def test_easy_ui_composes_as_the_tests_do(easyui):
     by = {d["slug"]: d for d in result["dashboards"]}
     assert {s: by[s]["from"] for s in SLUGS} == {s: ("project" if s == "overview" else "fitdata-garmin") for s in SLUGS}
     assert [(s["id"], s["placed"]) for s in by["overview"]["sections"]] == [
-        ("garmin-readings", "after:readings"), ("garmin-trends", "after:trends")]
+        ("garmin-readings", "after:readings"), ("garmin-charts", "after:charts")]
 
 
 def test_easy_ui_builds_and_validates_the_sample(easyui):

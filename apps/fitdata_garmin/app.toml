@@ -56,10 +56,11 @@ timeout = "3h"                           # about 35 throttled calls per day of h
 [ui]
 # Whole dashboards, in dashboards/<slug>.yaml. They read the shared views days and activities (so
 # another app's days and activities show up in them too) and this app's detail tables below.
-dashboards = ["sleep", "stress", "heart", "activity", "training", "body", "trends"]
+dashboards = ["sleep", "health", "workouts"]
 tables = ["garmin_sleep", "garmin_daily", "garmin_training", "garmin_body_battery_events", "garmin_samples",
           "garmin_sleep_stages"]
 
-# The Garmin readings on the project's Today page (ui/dashboards/overview.yaml).
+# The Garmin headline readings and the charts of the night and the day on the project's Today page
+# (ui/dashboards/overview.yaml).
 [ui.contributes.overview]
 sections = "dashboards/overview-garmin.yaml"

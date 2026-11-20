@@ -75,12 +75,6 @@
   color: var(--eui-muted);
 }
 
-/* The table of usual values: the comparison column is the one to read. */
-[data-id="today-usual"] .eui-td:last-child {
-  color: var(--eui-text);
-  font-weight: 500;
-}
-
 /* A duration ("7 h 41 min") is a longer figure than a score: it stays on one line and is sized to
    its tile, so it never breaks after the hours, from a phone to a wide screen. */
 .eui-component.duration .eui-value {
@@ -141,3 +135,8 @@
 .eui-component[data-type="stat"] .eui-note {
   font-weight: 500;
 }
+
+/* A band that covers much of its chart (Body Battery's lowest to highest of each day) stays light,
+   so the lines in front of it read first. */
+.eui-component.wide-band { --eui-chart-band-opacity: 0.1; }
+.eui-app[data-theme="dark"] .eui-component.wide-band { --eui-chart-band-opacity: 0.13; }

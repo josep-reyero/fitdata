@@ -6,45 +6,41 @@ named read-only SQL queries and a layout of fixed components. The look is `theme
 small stylesheets in `styles/`; there is no JavaScript or HTML here, so you or your assistant can
 rewrite a dashboard without risk.
 
+Four pages, each answering one question, the most important thing first:
+
 | Page | File | The question it answers |
 |---|---|---|
-| Today | `dashboards/overview.yaml` (the project's), with the sections of `../apps/fitdata_garmin/dashboards/overview-garmin.yaml` | How ready am I, how did I sleep, how is the day going? Readiness, sleep score, time asleep, Body Battery, HRV and resting heart rate each with Garmin's word for it and an arrow against your usual; stress, steps and intensity minutes against their goals; last night stage by stage, Body Battery, stress and heart rate through the day; your usual measure by measure; the latest activities |
-| Sleep | `../apps/fitdata_garmin/dashboards/sleep.yaml` | How long and how well did I sleep? Score, time asleep against need, bed and wake times; the night as a timeline of stages next to what made the score; heart rate, HRV, breathing, Body Battery and stress through the night; stages, sleep window, time asleep against need and score per night; night vitals; nights and naps |
-| Stress and energy | `../apps/fitdata_garmin/dashboards/stress.yaml` | How stressful was the day? Stress and Body Battery through the day, time in each stress level (one colour per level), what charged and drained the Body Battery; the levels, average stress, charge and drain, and Body Battery at wake within the day's range, day by day |
-| Heart and HRV | `../apps/fitdata_garmin/dashboards/heart.yaml` | Are my heart and HRV where they usually are? Heart rate through the day, HRV through the night; resting heart rate with its 7- and 28-day averages; overnight HRV inside Garmin's baseline band; the day's lowest and highest; the last two weeks |
-| Activity | `../apps/fitdata_garmin/dashboards/activity.yaml` | How much did I move? Steps, floors and intensity minutes against their goals (drawn as goal lines), the period's averages over the days recorded so far, calories, active and sitting time |
-| Training | `../apps/fitdata_garmin/dashboards/training.yaml` | Am I ready to train, and is my load right? Readiness and its factors, acute load inside its optimal range, load focus by kind, VO2 max, endurance and hill scores, training time per week and by sport, race predictions, the period's activities; without activities, one line saying what will appear |
-| Body | `../apps/fitdata_garmin/dashboards/body.yaml` | Weight, body fat, fitness age, water against its goal and heat acclimation; each part appears once something is logged, and without anything, one line saying where it comes from |
-| Trends | `../apps/fitdata_garmin/dashboards/trends.yaml` | Any of 24 measures day by day or as weekly or monthly averages (with the lowest-to-highest band) over 90 days to everything, next to a second measure |
+| Today | `dashboards/overview.yaml` (the project's), with the sections of `../apps/fitdata_garmin/dashboards/overview-garmin.yaml` | How is my day? Sleep score, time asleep, overnight HRV and resting heart rate; training readiness, Body Battery, stress and steps, each with an arrow against your usual; last night stage by stage, Body Battery and stress, and heart rate through the day |
+| Sleep | `../apps/fitdata_garmin/dashboards/sleep.yaml` | How did I sleep? Score, time asleep against need, bed and wake times against your usual; last night as a timeline of stages next to what made the score; stages per night against your sleep need, the score with its 7-night average, and when you slept |
+| Health | `../apps/fitdata_garmin/dashboards/health.yaml` | Is my body where it usually is? Stress, Body Battery at wake, resting heart rate and HRV (and weight and fitness age once there are some); Body Battery and stress through the day and by day; resting heart rate with its 7-day average, HRV inside Garmin's baseline band, and weight |
+| Workouts | `../apps/fitdata_garmin/dashboards/workouts.yaml` | How is training going? Readiness, training status, the last 7 days' load against its optimal range and VO2 max; the recent workouts (date, sport, time, distance, average heart rate, Garmin's effect and load); time per week, by sport, and load against its range; steps per day and intensity minutes per week against their goals |
 
 **Who owns which page.** Today belongs to the project: it holds the Day control and the day
-shown, and two anchors (`{anchor: readings}`, `{anchor: trends}`) where each app adds its own
-sections. fitdata-garmin adds the Garmin readings and charts there (its `[ui.contributes.overview]`
-in `app.toml`; the queries of a section are named after the app, `garmin_...`). The other pages
-come with fitdata-garmin (`[ui] dashboards` in its `app.toml`). `easy-ui compose` shows the pages
-as they are put together, and `easy-ui validate`, `preview` and `publish` put them together the
-same way. To change a page without editing the app, give the project its own copy:
-`dashboards/<slug>.yaml` here replaces the app's page of that name, and
+shown, and two anchors (`{anchor: readings}`, `{anchor: charts}`) where each app adds its own
+sections. fitdata-garmin adds its headline readings and the charts of the night and the day there
+(its `[ui.contributes.overview]` in `app.toml`; the queries of a section are named after the app,
+`garmin_...`). The other pages come with fitdata-garmin (`[ui] dashboards` in its `app.toml`).
+`easy-ui compose` shows the pages as they are put together, and `easy-ui validate`, `preview` and
+`publish` put them together the same way. To change a page without editing the app, give the
+project its own copy: `dashboards/<slug>.yaml` here replaces the app's page of that name, and
 `sections/fitdata-garmin.overview.yaml` (with `spec: easy-ui/sections-v1`) replaces what the app
 adds to Today (`sections: []` removes it).
 
-**Controls.** The day pages have a **Day** control (a date, today by default) and most have a
-**Period**, whose shortest choice is the default (2 weeks; 30 days on Training, where load builds
-over weeks; 90 days on Body, where weigh-ins are far apart). A day that has not synced yet shows
-the most recent day with data, so a late sync never shows an empty page; Today says which day it
-shows in one quiet line under its control. Trends has its own controls: the measure, the one next
-to it, each day or week or month averages, and how far back from the latest day. Days without a
-reading are left out of averages and show as gaps, never as zero.
+**Controls.** Every page has a **Day** control (a date, today by default). Sleep, Health and
+Workouts also have a **Period**, how far back their charts go, from 2 weeks to a year; its
+shortest choice is the default (30 days on Workouts, where load builds over weeks). A day that has
+not synced yet shows the most recent day with data, so a late sync never shows an empty page;
+Today says which day it shows in one quiet line under its control. Days without a reading are left
+out of averages and show as gaps, never as zero.
 
 **Few days of data.** The pages are made for an account that has just started as much as for
 years of data. Charts span the days there are, not the whole period. Every arrow compares a
 reading with **your usual**: the average of the days before it (up to 28) that have one, and only
-once there are 3 of them; until then the readings stand alone. Averages say how many days they
-are made of ("Over 4 days", "3 days so far"), a 7-day average line appears once 3 of its 7 days
-have a reading and a 28-day one once 14 do. A panel that needs data the archive does not have yet
-(weigh-ins, race predictions, naps, an HRV baseline, activities) is left out of the page
-(`hide_empty: true`), and Training without activities and Body without anything logged say in
-one line what will appear there and how.
+once there are 3 of them; until then the readings stand alone. A 7-day average line appears once 3
+of its 7 days have a reading. A panel that needs data the archive does not have yet (weigh-ins,
+fitness age, an HRV baseline, workouts, training status) is left out of the page
+(`hide_empty: true`), and Workouts without any workout says in one line what will appear there and
+how, while the training numbers Garmin already has (readiness after the first nights) still show.
 
 **Data.** The dashboards read the project's shared views `days` and `activities` (one row per
 day and per activity, from every app of the project), so a second app's days and activities show
@@ -60,14 +56,15 @@ of measures one colour, the same on every page: sleep violet, stress amber, ener
 teal, heart red, activity green, training blue, body brown. A component joins a family with its
 `class:` (`class: sleep`, `class: [energy, pair-energy-stress]`), which colours the dot before a
 reading's name, the short rule over a panel and its chart lines; `hypnogram` colours a night's
-stage lanes, `bands` the stress levels and `load-focus` the kinds of training load.
+stage lanes, `stages` the stages of a stacked bar and `sports` the groups of sports.
 `styles/20-look.css` sets the figures and the notes, and a few classes: `duration` keeps a
 duration figure ("7 h 41 min") on one line sized to its tile, `dayline` turns a stat into the
-quiet line that says which day a page shows, and `empty-note` into the friendly line of a page
-with nothing yet. It sets no widths: easy-ui lays the rows out for every screen, from a phone to a
-wide monitor. Group related readings in one row (two or three charts side by side) and let them
-wrap; each number keeps a one-line caption, and the explanations go in the notes at the end of
-the page.
+quiet line that says which day a page shows, `empty-note` into the friendly line of a page with
+nothing yet, and `wide-band` keeps a band that covers much of its chart light. It sets no widths:
+easy-ui lays the rows out for every screen, from a phone to a wide monitor. Keep each page short:
+a row of up to six readings, each with one short line under it (Garmin's word, a goal, a unit),
+at most about five charts, one per question, two or three side by side, and one line of notes at
+the end.
 
 ## Try it with the sample data
 
@@ -186,9 +183,9 @@ uv run python ui/fixtures/make_fixture.py --variant new-watch   # fixtures/new-w
 ```
 
 `screenshots/` holds pictures of every page made from these samples at twice the screen's
-density (`easy-ui screenshot` does that by default): a laptop (1440 px) in light and dark, phones
-(390 px), a wide screen (2560 px) and the new watch, shown in the project's README. Take new ones
-from the samples only, never from a real index, for example
+density (`easy-ui screenshot` does that by default): a laptop (1440 px) in light, one in dark,
+phones (390 px), a wide screen (2200 px) and the new watch, shown in the project's README. Take
+new ones from the samples only, never from a real index, for example
 `easy-ui screenshot sleep --fixture --width 1440 --height 1100 --out ui/screenshots/sleep.png`.
 
 The file ends in `.db` because `.gitignore` refuses every `*.sqlite`, so a real index is never
@@ -196,7 +193,7 @@ committed by mistake. Never put a real index in `fixtures/`.
 
 The tests check both samples against **fitdata**, put the pages together the way easy-ui does and
 run every query on both (`uv run python -m pytest tests/test_dashboards.py`): the panels that need
-more data must be empty for the new watch, its pages must say what will appear, and no arrow may
+more data must be empty for the new watch, Workouts must say what will appear, and no arrow may
 show without a usual. With **my-easy-ui** added, they also run `easy-ui compose`, `data build` and
 `validate` (with no warnings) on both samples:
 

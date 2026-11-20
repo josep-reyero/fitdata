@@ -112,8 +112,9 @@ records = "integer"
 [ui]
 accent = "#2a7f62"
 # The menu order; the first one (Today) opens when the page starts. "overview" is the project's own
-# (ui/dashboards/), the others come from fitdata-garmin (apps/fitdata_garmin/dashboards/).
-dashboards = ["overview", "sleep", "stress", "heart", "activity", "training", "body", "trends"]
+# (ui/dashboards/), the others (Sleep, Health, Workouts) come from fitdata-garmin
+# (apps/fitdata_garmin/dashboards/).
+dashboards = ["overview", "sleep", "health", "workouts"]
 # Every job rebuilds the index, so the dashboard data is rebuilt after each of them.
 refresh_after = ["fitdata-garmin.activities", "fitdata-garmin.today", "fitdata-garmin.daily", "fitdata-garmin.backfill"]
 

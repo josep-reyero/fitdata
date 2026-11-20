@@ -1,0 +1,253 @@
+spec: easy-ui/v1
+title: Health
+description: >-
+  Stress and Body Battery, heart rate, HRV against your baseline, and weight.
+
+params:
+  day:
+    type: date
+    label: Day
+    default: today
+  days:
+    type: choice
+    label: Period
+    default: 14
+    options:
+      - {value: 14, label: 2 weeks}
+      - {value: 30, label: 30 days}
+      - {value: 90, label: 90 days}
+      - {value: 365, label: 1 year}
+
+queries:
+  # The chosen day (or the most recent one with data), against your usual: the average of the days
+  # before it (up to 28), once there are 3.
+  today:
+    sql: |
+      WITH sel AS (
+        SELECT min(:day, (SELECT max(date) FROM days WHERE has_data = 1)) AS d
+      ),
+      usual AS (
+        SELECT avg(x.stress_avg) AS stress, count(x.stress_avg) AS n_stress,
+               avg(g.body_battery_at_wake) AS bbw, count(g.body_battery_at_wake) AS n_bbw,
+               avg(x.resting_hr) AS rhr, count(x.resting_hr) AS n_rhr,
+               avg(x.hrv_last_night_avg) AS hrv, count(x.hrv_last_night_avg) AS n_hrv
+        FROM days x LEFT JOIN garmin_daily g ON g.date = x.date, sel
+        WHERE x.has_data = 1 AND x.date >= date(sel.d, '-28 days') AND x.date < sel.d
+      )
+      SELECT d.stress_avg AS stress, CASE WHEN u.n_stress >= 3 THEN d.stress_avg - u.stress END AS stress_change,
+             CASE WHEN d.stress_avg IS NULL THEN NULL WHEN d.stress_avg <= 25 THEN 'Resting'
+                  WHEN d.stress_avg <= 50 THEN 'Low' WHEN d.stress_avg <= 75 THEN 'Medium' ELSE 'High' END AS stress_word,
+             g.body_battery_at_wake AS bbw, CASE WHEN u.n_bbw >= 3 THEN g.body_battery_at_wake - u.bbw END AS bbw_change,
+             CASE WHEN d.body_battery_low IS NOT NULL
+                  THEN printf('Lowest %d, highest %d', d.body_battery_low, d.body_battery_high) END AS bb_word,
+             d.resting_hr AS rhr, CASE WHEN u.n_rhr >= 3 THEN d.resting_hr - u.rhr END AS rhr_change,
+             CASE WHEN d.resting_hr IS NOT NULL THEN 'Beats per minute' END AS rhr_word,
+             d.hrv_last_night_avg AS hrv, CASE WHEN u.n_hrv >= 3 THEN d.hrv_last_night_avg - u.hrv END AS hrv_change,
+             CASE WHEN d.hrv_last_night_avg IS NULL THEN NULL
+                  WHEN d.hrv_status IS NULL OR upper(d.hrv_status) = 'NONE' THEN 'No baseline yet'
+                  ELSE upper(substr(d.hrv_status, 1, 1)) || lower(substr(replace(d.hrv_status, '_', ' '), 2)) END AS hrv_word
+      FROM sel LEFT JOIN days d ON d.date = sel.d AND d.has_data = 1
+           LEFT JOIN garmin_daily g ON g.date = sel.d, usual u
+
+  # Stress and Body Battery through the chosen day (kept for the most recent weeks).
+  through_the_day:
+    sql: |
+      WITH sel AS (
+        SELECT min(:day, (SELECT max(date) FROM days WHERE has_data = 1)) AS d
+      )
+      SELECT substr(s.at, 12, 5) AS time,
+             max(CASE WHEN s.series = 'body_battery' THEN s.value END) AS "Body Battery",
+             max(CASE WHEN s.series = 'stress' THEN s.value END) AS "Stress"
+      FROM garmin_samples s, sel
+      WHERE s.date = sel.d AND s.series IN ('body_battery', 'stress')
+      GROUP BY s.at
+      ORDER BY s.at
+
+  # One row per recorded day of the period, ending on the chosen day: Body Battery at wake inside
+  # the day's lowest-to-highest range, average stress, resting heart rate with its 7-day average
+  # (once 3 of the 7 days have one), overnight HRV with Garmin's 7-day average and baseline.
+  daily:
+    sql: |
+      WITH sel AS (
+        SELECT min(:day, (SELECT max(date) FROM days WHERE has_data = 1)) AS d
+      ),
+      x AS (
+        SELECT d.date, d.stress_avg, d.body_battery_low, d.body_battery_high, g.body_battery_at_wake,
+               d.resting_hr, avg(d.resting_hr) OVER w AS rhr_7d, count(d.resting_hr) OVER w AS n_7d,
+               d.hrv_last_night_avg AS hrv, g.hrv_weekly_avg, g.hrv_baseline_low, g.hrv_baseline_high
+        FROM days d LEFT JOIN garmin_daily g ON g.date = d.date
+        WHERE d.has_data = 1
+        WINDOW w AS (ORDER BY julianday(d.date) RANGE BETWEEN 6 PRECEDING AND CURRENT ROW)
+      )
+      SELECT x.date AS day,
+             x.body_battery_at_wake AS "Body Battery at wake", x.stress_avg AS "Average stress",
+             x.body_battery_low AS bb_low, x.body_battery_high AS bb_high,
+             x.resting_hr AS "Resting heart rate", CASE WHEN x.n_7d >= 3 THEN round(x.rhr_7d, 1) END AS "7-day average",
+             x.hrv AS "Overnight HRV", x.hrv_weekly_avg AS "7-day HRV average",
+             x.hrv_baseline_low AS baseline_low, x.hrv_baseline_high AS baseline_high
+      FROM x, sel
+      WHERE x.date > date(sel.d, '-' || :days || ' days') AND x.date <= sel.d
+      ORDER BY x.date
+
+  # The latest weigh-in up to the chosen day (its date and body fat under it) and its change against
+  # the latest one at least 28 days before it; the latest fitness age. No row until there is one.
+  body:
+    sql: |
+      WITH sel AS (
+        SELECT min(:day, (SELECT max(date) FROM days WHERE has_data = 1 OR weight_kg IS NOT NULL)) AS d
+      ),
+      w AS (SELECT date, weight_kg, body_fat_pct FROM days, sel WHERE weight_kg IS NOT NULL AND date <= sel.d),
+      last AS (SELECT * FROM w ORDER BY date DESC LIMIT 1),
+      before AS (SELECT w.* FROM w, last WHERE w.date <= date(last.date, '-28 days') ORDER BY w.date DESC LIMIT 1),
+      fa AS (SELECT t.fitness_age, t.chronological_age FROM garmin_training t, sel
+             WHERE t.fitness_age IS NOT NULL AND t.date <= sel.d ORDER BY t.date DESC LIMIT 1)
+      SELECT l.weight_kg AS weight, l.weight_kg - b.weight_kg AS weight_change,
+             CAST(strftime('%d', l.date) AS INTEGER) || ' '
+               || substr('JanFebMarAprMayJunJulAugSepOctNovDec', 1 + 3 * (strftime('%m', l.date) - 1), 3)
+               || CASE WHEN l.body_fat_pct IS NOT NULL THEN printf(' · %.1f%% fat', l.body_fat_pct) ELSE '' END
+               AS weight_word,
+             fa.fitness_age, printf('Your age %d', fa.chronological_age) AS age_word
+      FROM (SELECT 1) LEFT JOIN last l LEFT JOIN before b LEFT JOIN fa
+      WHERE l.weight_kg IS NOT NULL OR fa.fitness_age IS NOT NULL
+
+  # Weigh-in days of the period only, with the average of the last seven weigh-ins once there are 3.
+  weight:
+    sql: |
+      WITH sel AS (
+        SELECT min(:day, (SELECT max(date) FROM days WHERE has_data = 1 OR weight_kg IS NOT NULL)) AS d
+      ),
+      w AS (
+        SELECT date, weight_kg,
+               CASE WHEN count(weight_kg) OVER r >= 3 THEN round(avg(weight_kg) OVER r, 2) END AS avg7
+        FROM days WHERE weight_kg IS NOT NULL
+        WINDOW r AS (ORDER BY date ROWS BETWEEN 6 PRECEDING AND CURRENT ROW)
+      )
+      SELECT w.date AS day, w.weight_kg AS "Weight", w.avg7 AS "Average of 7 weigh-ins"
+      FROM w, sel
+      WHERE w.date > date(sel.d, '-' || :days || ' days') AND w.date <= sel.d
+      ORDER BY w.date
+
+layout:
+  - - type: controls
+
+  - - type: stat
+      title: Average stress
+      class: stress
+      query: today
+      value: stress
+      format: integer
+      delta: stress_change
+      delta_format: integer
+      better: lower
+      note: stress_word
+    - type: stat
+      title: Body Battery at wake
+      class: energy
+      query: today
+      value: bbw
+      format: integer
+      delta: bbw_change
+      delta_format: integer
+      better: higher
+      note: bb_word
+    - type: stat
+      title: Resting heart rate
+      class: heart
+      query: today
+      value: rhr
+      format: integer
+      delta: rhr_change
+      delta_format: decimal1
+      better: lower
+      note: rhr_word
+    - type: stat
+      title: Overnight HRV (ms)
+      class: heart
+      query: today
+      value: hrv
+      format: integer
+      delta: hrv_change
+      delta_format: integer
+      better: higher
+      note: hrv_word
+    - type: stat
+      title: Weight (kg)
+      class: body
+      query: body
+      value: weight
+      format: decimal1
+      delta: weight_change
+      delta_format: decimal1
+      note: weight_word
+      hide_empty: true
+    - type: stat
+      title: Fitness age
+      class: body
+      query: body
+      value: fitness_age
+      format: integer
+      note: age_word
+      hide_empty: true
+
+  - - type: line
+      title: Body Battery and stress through the day
+      id: day-energy
+      class: [energy, pair-energy-stress]
+      query: through_the_day
+      x: time
+      y: [Body Battery, Stress]
+      format: integer
+      step: 25
+      hide_empty: true
+    - type: line
+      title: Body Battery and stress by day
+      id: energy-days
+      class: [energy, pair-energy-stress, wide-band]
+      query: daily
+      x: day
+      y: [Body Battery at wake, Average stress]
+      band: {low: bb_low, high: bb_high, label: Body Battery range}
+      format: integer
+      step: 25
+      hide_empty: true
+
+  - - type: line
+      title: Resting heart rate
+      id: rhr-days
+      class: [heart, with-average]
+      query: daily
+      x: day
+      y: [Resting heart rate, 7-day average]
+      dashed: 7-day average
+      format: integer
+      unit: bpm
+      hide_empty: true
+    - type: line
+      title: Overnight HRV and your baseline
+      id: hrv-baseline
+      class: [heart, with-average]
+      query: daily
+      x: day
+      y: [Overnight HRV, 7-day HRV average]
+      dashed: 7-day HRV average
+      band: {low: baseline_low, high: baseline_high, label: Your baseline}
+      format: integer
+      unit: ms
+      hide_empty: true
+    - type: line
+      title: Weight
+      id: weight
+      class: [body, with-average]
+      query: weight
+      x: day
+      y: [Weight, Average of 7 weigh-ins]
+      dashed: Average of 7 weigh-ins
+      format: decimal1
+      unit: kg
+      hide_empty: true
+
+  - - type: text
+      class: notes
+      body: |
+        Inside the shaded baseline your HRV is balanced; below it, take it easier. Stress, Body
+        Battery and HRV status are Garmin's own.

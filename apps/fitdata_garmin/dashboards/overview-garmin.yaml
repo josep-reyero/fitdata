@@ -1,16 +1,17 @@
 spec: easy-ui/sections-v1
-# fitdata-garmin's part of the project's Today page (ui/dashboards/overview.yaml): the Garmin
-# readings, placed at its anchors. Query names start with garmin_, this app's table prefix; the
-# queries use the page's own "day" control (the day shown is that day, or the most recent day with
-# data when it is later). To change what this adds to the page without editing the app, a project
-# can put its own version in ui/sections/fitdata-garmin.overview.yaml.
+# fitdata-garmin's part of the project's Today page (ui/dashboards/overview.yaml): the headline
+# readings and the night and the day hour by hour, placed at its anchors. Query names start with
+# garmin_, this app's table prefix; the queries use the page's own "day" control (the day shown is
+# that day, or the most recent day with data when it is later). To change what this adds to the
+# page without editing the app, a project can put its own version in
+# ui/sections/fitdata-garmin.overview.yaml.
 sections:
   - id: garmin-readings
     position: after:readings
     queries:
       # The shown day's readings, each with its change against your usual: the average of the days
       # before it (up to 28) that have a reading. With fewer than 3 such days there is no usual yet,
-      # so no change is shown. Garmin's words for the day go in the *_word columns.
+      # so no change is shown. The *_word columns are the short line under each figure.
       garmin_today:
         sql: |
           WITH sel AS (
@@ -20,11 +21,10 @@ sections:
             SELECT avg(x.training_readiness) AS ready, count(x.training_readiness) AS n_ready,
                    avg(x.sleep_score) AS score, count(x.sleep_score) AS n_score,
                    avg(nullif(x.sleep_seconds, 0)) AS asleep, count(nullif(x.sleep_seconds, 0)) AS n_asleep,
-                   avg(g.body_battery_at_wake) AS bbw, count(g.body_battery_at_wake) AS n_bbw,
                    avg(x.hrv_last_night_avg) AS hrv, count(x.hrv_last_night_avg) AS n_hrv,
                    avg(x.resting_hr) AS rhr, count(x.resting_hr) AS n_rhr,
                    avg(x.stress_avg) AS stress, count(x.stress_avg) AS n_stress
-            FROM days x LEFT JOIN garmin_daily g ON g.date = x.date, sel
+            FROM days x, sel
             WHERE x.has_data = 1 AND x.date >= date(sel.d, '-28 days') AND x.date < sel.d
           )
           SELECT d.training_readiness AS ready,
@@ -36,103 +36,25 @@ sections:
                  CASE WHEN u.n_asleep >= 3 THEN round((nullif(d.sleep_seconds, 0) - u.asleep) / 60) * 60 END AS asleep_change,
                  CASE WHEN s.need_minutes IS NOT NULL
                       THEN printf('Need %d h %02d', s.need_minutes / 60, s.need_minutes % 60) END AS asleep_word,
-                 g.body_battery_at_wake AS bbw, CASE WHEN u.n_bbw >= 3 THEN g.body_battery_at_wake - u.bbw END AS bbw_change,
                  d.hrv_last_night_avg AS hrv, CASE WHEN u.n_hrv >= 3 THEN d.hrv_last_night_avg - u.hrv END AS hrv_change,
                  CASE WHEN d.hrv_last_night_avg IS NULL THEN NULL
                       WHEN d.hrv_status IS NULL OR upper(d.hrv_status) = 'NONE' THEN 'No baseline yet'
                       ELSE upper(substr(d.hrv_status, 1, 1)) || lower(substr(replace(d.hrv_status, '_', ' '), 2)) END AS hrv_word,
                  d.resting_hr AS rhr, CASE WHEN u.n_rhr >= 3 THEN d.resting_hr - u.rhr END AS rhr_change,
+                 CASE WHEN d.resting_hr IS NOT NULL THEN 'Beats per minute' END AS rhr_word,
+                 g.body_battery_latest AS bb,
+                 CASE WHEN g.body_battery_at_wake IS NOT NULL THEN printf('Woke up with %d', g.body_battery_at_wake) END AS bb_word,
                  d.stress_avg AS stress, CASE WHEN u.n_stress >= 3 THEN d.stress_avg - u.stress END AS stress_change,
-                 CASE WHEN d.stress_avg IS NULL THEN NULL WHEN d.stress_avg <= 25 THEN 'Rest'
+                 CASE WHEN d.stress_avg IS NULL THEN NULL WHEN d.stress_avg <= 25 THEN 'Resting'
                       WHEN d.stress_avg <= 50 THEN 'Low' WHEN d.stress_avg <= 75 THEN 'Medium' ELSE 'High' END AS stress_word,
-                 g.body_battery_latest AS bb_latest,
-                 upper(substr(replace(replace(g.body_battery_feedback, 'DAY_', ''), '_', ' '), 1, 1))
-                   || lower(substr(replace(replace(g.body_battery_feedback, 'DAY_', ''), '_', ' '), 2)) AS bb_word,
                  nullif(d.steps, 0) AS steps, nullif(d.steps, 0) - d.steps_goal AS steps_vs_goal,
-                 CASE WHEN d.steps_goal IS NOT NULL THEN printf('Goal %,d', d.steps_goal) END AS steps_word,
-                 g.intensity_week_total AS week_minutes,
-                 g.intensity_week_total - g.intensity_week_goal AS week_vs_goal,
-                 CASE WHEN g.intensity_week_goal IS NOT NULL THEN printf('Goal %d', g.intensity_week_goal) END AS week_word,
-                 d.active_calories AS active_kcal
+                 CASE WHEN d.steps_goal IS NOT NULL THEN printf('Goal %,d', d.steps_goal) END AS steps_word
           FROM sel LEFT JOIN days d ON d.date = sel.d AND d.has_data = 1
                LEFT JOIN garmin_daily g ON g.date = sel.d LEFT JOIN garmin_sleep s ON s.date = sel.d
                LEFT JOIN garmin_training t ON t.date = sel.d, usual u
-
-      # One line per measure: your usual (the average of the days before the shown one, up to 28)
-      # with how many days it is made of, and which way the shown day went (its own value is in the
-      # figures above). Mixed units (hours, beats, milliseconds), so the values are written out as text.
-      garmin_usual:
-        sql: |
-          WITH sel AS (
-            SELECT min(:day, (SELECT max(date) FROM days WHERE has_data = 1)) AS d
-          ),
-          m AS (
-            SELECT x.date, x.training_readiness AS ready, x.sleep_score AS score, nullif(x.sleep_seconds, 0) / 60.0 AS asleep,
-                   x.hrv_last_night_avg AS hrv, x.resting_hr AS rhr, g.body_battery_at_wake AS bbw,
-                   x.stress_avg AS stress, nullif(x.steps, 0) AS steps
-            FROM days x LEFT JOIN garmin_daily g ON g.date = x.date, sel
-            WHERE x.has_data = 1 AND x.date >= date(sel.d, '-28 days') AND x.date <= sel.d
-          ),
-          long AS (
-            SELECT 1 AS k, date, ready AS v FROM m UNION ALL SELECT 2, date, score FROM m
-            UNION ALL SELECT 3, date, asleep FROM m UNION ALL SELECT 4, date, hrv FROM m
-            UNION ALL SELECT 5, date, rhr FROM m UNION ALL SELECT 6, date, bbw FROM m
-            UNION ALL SELECT 7, date, stress FROM m UNION ALL SELECT 8, date, steps FROM m
-          ),
-          agg AS (
-            SELECT k, max(CASE WHEN date = sel.d THEN v END) AS today,
-                   avg(CASE WHEN date < sel.d THEN v END) AS usual,
-                   count(CASE WHEN date < sel.d THEN v END) AS n,
-                   (SELECT min(date) FROM days WHERE has_data = 1) > date(sel.d, '-28 days') AS young
-            FROM long, sel GROUP BY k
-          ),
-          txt AS (
-            SELECT k, c, CASE
-                WHEN v IS NULL THEN NULL
-                WHEN k = 3 THEN printf('%d h %02d min', CAST(round(v) AS INTEGER) / 60, CAST(round(v) AS INTEGER) % 60)
-                WHEN k = 4 THEN printf('%.0f ms', v)
-                WHEN k = 5 THEN printf('%.0f bpm', v)
-                WHEN k = 8 THEN printf('%,d', CAST(round(v) AS INTEGER))
-                ELSE printf('%.0f', v) END AS t
-            FROM (SELECT k, 0 AS c, today AS v FROM agg UNION ALL SELECT k, 1, usual FROM agg WHERE n >= 3)
-          )
-          SELECT CASE a.k WHEN 1 THEN 'Training readiness' WHEN 2 THEN 'Sleep score' WHEN 3 THEN 'Time asleep'
-                   WHEN 4 THEN 'Overnight HRV' WHEN 5 THEN 'Resting heart rate' WHEN 6 THEN 'Body Battery at wake'
-                   WHEN 7 THEN 'Average stress' ELSE 'Steps' END AS measure,
-                 (SELECT t FROM txt WHERE txt.k = a.k AND c = 0) AS today,
-                 (SELECT t FROM txt WHERE txt.k = a.k AND c = 1) AS usual_value,
-                 CASE WHEN a.n = 0 THEN 'none yet'
-                      WHEN a.n < 3 THEN printf('%d so far (3 needed)', a.n)
-                      WHEN a.young THEN printf('%d so far', a.n)
-                      ELSE printf('%d of 28', a.n) END AS based_on,
-                 CASE WHEN a.n < 3 THEN printf('needs 3 days, %d so far', a.n)
-                      ELSE (SELECT t FROM txt WHERE txt.k = a.k AND c = 1)
-                           || CASE WHEN a.young THEN printf(' · %d days so far', a.n)
-                                   ELSE printf(' · %d of 28 days', a.n) END END AS usual,
-                 CASE WHEN a.today IS NULL OR a.n < 3 OR a.usual IS NULL OR a.usual = 0 THEN NULL
-                      WHEN abs(a.today - a.usual) / a.usual < 0.03 THEN '→ about as usual'
-                      ELSE (CASE WHEN a.today > a.usual THEN '↑ ' ELSE '↓ ' END)
-                           || printf('%.0f', 100.0 * abs(a.today - a.usual) / a.usual)
-                           || '%'
-                           || (CASE WHEN (a.today > a.usual) = (a.k NOT IN (5, 7)) THEN ' · better' ELSE ' · worse' END)
-                 END AS compared
-          FROM agg a
-          WHERE (SELECT count(*) FROM m) > 0
-          ORDER BY a.k
     layout:
-      # The morning: how the night went and what it left you with.
+      # The night ...
       - - type: stat
-          title: Training readiness
-          id: today-readiness
-          class: training
-          query: garmin_today
-          value: ready
-          format: integer
-          delta: ready_change
-          delta_format: integer
-          better: higher
-          note: ready_word
-        - type: stat
           title: Sleep score
           class: sleep
           query: garmin_today
@@ -152,17 +74,7 @@ sections:
           better: higher
           note: asleep_word
         - type: stat
-          title: Body Battery at wake
-          class: energy
-          query: garmin_today
-          value: bbw
-          format: integer
-          delta: bbw_change
-          delta_format: integer
-          better: higher
-          hint: Out of 100
-        - type: stat
-          title: Overnight HRV
+          title: Overnight HRV (ms)
           class: heart
           query: garmin_today
           value: hrv
@@ -171,7 +83,6 @@ sections:
           delta_format: integer
           better: higher
           note: hrv_word
-          hint: Milliseconds
         - type: stat
           title: Resting heart rate
           class: heart
@@ -181,10 +92,28 @@ sections:
           delta: rhr_change
           delta_format: decimal1
           better: lower
-          hint: Beats per minute
+          note: rhr_word
 
-      # The day so far.
+      # ... and the day.
       - - type: stat
+          title: Training readiness
+          id: today-readiness
+          class: training
+          query: garmin_today
+          value: ready
+          format: integer
+          delta: ready_change
+          delta_format: integer
+          better: higher
+          note: ready_word
+        - type: stat
+          title: Body Battery
+          class: energy
+          query: garmin_today
+          value: bb
+          format: integer
+          note: bb_word
+        - type: stat
           title: Average stress
           class: stress
           query: garmin_today
@@ -195,13 +124,6 @@ sections:
           better: lower
           note: stress_word
         - type: stat
-          title: Body Battery now
-          class: energy
-          query: garmin_today
-          value: bb_latest
-          format: integer
-          note: bb_word
-        - type: stat
           title: Steps
           class: activity
           query: garmin_today
@@ -210,25 +132,9 @@ sections:
           delta: steps_vs_goal
           better: higher
           note: steps_word
-        - type: stat
-          title: Intensity minutes this week
-          class: activity
-          query: garmin_today
-          value: week_minutes
-          format: integer
-          delta: week_vs_goal
-          better: higher
-          note: week_word
-        - type: stat
-          title: Active calories
-          class: activity
-          query: garmin_today
-          value: active_kcal
-          format: integer
-          hint: Kilocalories
 
-  - id: garmin-trends
-    position: after:trends
+  - id: garmin-charts
+    position: after:charts
     queries:
       # The night that ended on the shown day, stage by stage (kept for the most recent weeks).
       garmin_night:
@@ -266,21 +172,6 @@ sections:
           FROM garmin_samples s, sel
           WHERE s.date = sel.d AND s.series = 'heart_rate'
           ORDER BY s.at
-
-      # The latest activities up to the shown day.
-      garmin_last_activities:
-        sql: |
-          WITH sel AS (
-            SELECT min(:day, (SELECT max(date) FROM days WHERE has_data = 1)) AS d
-          )
-          SELECT a.start_local AS started,
-                 upper(substr(replace(coalesce(a.type, 'activity'), '_', ' '), 1, 1))
-                   || substr(replace(coalesce(a.type, 'activity'), '_', ' '), 2) AS kind,
-                 a.duration_s AS duration, nullif(a.distance_m, 0) AS distance, a.training_load
-          FROM activities a, sel
-          WHERE a.date <= sel.d AND a.date > date(sel.d, '-14 days')
-          ORDER BY a.start_local DESC, a.id DESC
-          LIMIT 3
     layout:
       - - type: timeline
           title: Last night
@@ -313,37 +204,8 @@ sections:
           unit: bpm
           hide_empty: true
 
-      - - type: table
-          title: Against your usual
-          id: today-usual
-          class: baseline
-          query: garmin_usual
-          hide_empty: true
-          columns:
-            - {column: measure, label: Measure}
-            - {column: usual, label: Your usual}
-            - {column: compared, label: This day}
-        - type: table
-          title: Latest activities
-          class: training
-          query: garmin_last_activities
-          hide_empty: true
-          columns:
-            - {column: started, label: Started, format: datetime}
-            - {column: kind, label: Type}
-            - {column: duration, label: Time, format: duration}
-            - {column: distance, label: Distance, format: distance}
-            - {column: training_load, label: Load, format: integer}
-
       - - type: text
           class: notes
           body: |
-            **Your usual** is the average of the days before the one shown, up to 28 days back,
-            leaving out days the watch did not record (never counted as zero). It needs 3 such
-            days; until then the readings stand alone, without arrows. Green is the better way for
-            that measure, red the worse. For the current day, steps and stress keep moving until
-            midnight.
-
-            Readiness, sleep score, Body Battery, stress and HRV are **Garmin's own calculations**.
-            A trend over a few weeks says more than one day. The charts of the night and the day
-            are kept for the most recent weeks only; older days show their daily numbers.
+            Arrows compare with **your usual**, the average of up to 28 earlier days (once there
+            are 3). Scores are Garmin's own.
